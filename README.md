@@ -258,6 +258,7 @@ Three rules shape all of this:
 | TsingMicro | `tsm_smi` | chip (4/card on TX8110) | card-level; process table per card |
 | T-Head PPU | `ppu-smi` | PPU | yes — installed under `/usr/local/PPU_SDK/ppu-smi/bin`, not on `PATH` |
 | Iluvatar (天数) | `ixsmi` | GPU | yes — `/usr/local/corex/bin`, needs `LD_LIBRARY_PATH` |
+| Hygon (海光) | `hy-smi` | DCU | `/opt/hyhal/bin`; memory from sysfs, processes from KFD |
 | Hygon DCU | `hy-smi` | — | not parsed yet; the CPU side still works |
 
 Which tool to run is decided by the host, not the inventory: every family is probed

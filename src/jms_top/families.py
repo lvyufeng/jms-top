@@ -69,7 +69,7 @@ class Card:
     index: int
     name: str = ""
     util: float | None = None  # percent
-    mem_used: float | None = None  # MiB
+    mem_used: float | None = None  # MiB (Hygon reports GiB — see Hygon.parse)
     mem_total: float | None = None  # MiB
     temp: float | None = None  # C
     power: float | None = None  # W
@@ -82,6 +82,11 @@ class Card:
     #: then the whole signal). False means *unknown* — a table we failed to find must
     #: never be mistaken for "nothing is running".
     procs_known: bool = True
+    #: True when `procs` is the *host-wide* list rather than this card's own. Hygon's
+    #: KFD says a process holds a queue but not which card runs it, so the list is
+    #: attached to the host and not to an individual card — the UI must not present it
+    #: as "card 0 is running these".
+    procs_shared: bool = False
 
     # --- derived state ----------------------------------------------------------
 
@@ -1087,6 +1092,109 @@ def _tile_cards(body: str, name_re: re.Pattern[str], stat_re: re.Pattern[str]) -
     return cards
 
 
+class Hygon(Family):
+    """海光 DCU (``hy-smi``, C-3000 / BW1101).
+
+    The tool reports every rate as a percentage and nothing as bytes: a machine
+    holding 104.9 GiB on each of eight cards prints ``VRAM%  73`` on all of them,
+    which cannot distinguish "one job using 73%" from "five jobs". It also has no
+    process table. Both gaps are filled from the kernel:
+
+    * ``/sys/class/drm/cardN/device/mem_info_vram_{used,total}`` — exact bytes.
+    * ``/sys/class/kfd/kfd/proc/*`` — every process holding a GPU queue, i.e. the
+      same list ``rocm-smi`` shows. Note these are *host-wide*: KFD does not say
+      which card a queue runs on, so processes are attached to the host, not to an
+      individual card. Guessing a card would be worse than showing none.
+
+    Display memory in GiB: the numbers are 154 GB per card, far past what a MiB
+    column can hold legibly.
+    """
+
+    key = "hygon"
+    label = "Hygon"
+    marker = re.compile(r"^##HYGON\b")
+
+    #: ``0   44.0C  312.0W  auto  800.0W  73%  25.0%  0.0%  0.0%  Normal``
+    _ROW = re.compile(
+        r"^\s*(?P<idx>\d+)\s+(?P<temp>[\d.]+)C\s+(?P<power>[\d.]+)W\s+\S+\s+"
+        r"(?P<cap>[\d.]+)W\s+(?P<vram>[\d.]+)%\s+(?P<util>[\d.]+)%"
+    )
+    #: ``card1 112614580224 154602045440``
+    _VRAM = re.compile(r"^card(?P<card>\d+)\s+(?P<used>\d+)\s+(?P<total>\d+)\s*$")
+    #: ``2817478 root /usr/bin/python3 -u /cluster/train.py …``
+    _PROC = re.compile(r"^(?P<pid>\d+)\s+(?P<user>\S+)\s+(?P<cmd>.+)$")
+
+    def parse(self, body: str) -> AccelResult:
+        res = AccelResult(family=self.key, label=self.label)
+        cards: list[Card] = []
+        vram: list[tuple[int, int]] = []
+        procs: list[Proc] = []
+        section = ""
+        for line in body.splitlines():
+            if line.startswith("##HYGON-VRAM"):
+                section = "vram"
+                continue
+            if line.startswith("##HYGON-PROCS"):
+                section = "procs"
+                continue
+            if section == "vram":
+                m = self._VRAM.match(line)
+                if m:
+                    vram.append((int(m.group("used")), int(m.group("total"))))
+                continue
+            if section == "procs":
+                m = self._PROC.match(line.strip())
+                if m:
+                    procs.append(
+                        Proc(
+                            pid=int(m.group("pid")),
+                            user=m.group("user"),
+                            name=_shorten(m.group("cmd")),
+                            mem_mib=None,
+                        )
+                    )
+                continue
+            m = self._ROW.match(line)
+            if m:
+                card = Card(index=int(m.group("idx")))
+                card.temp = _num(m.group("temp"))
+                card.power = _num(m.group("power"))
+                card.util = _num(m.group("util"))
+                cards.append(card)
+        if not cards:
+            res.error = _first_error(body) or "hy-smi returned no HCU rows"
+            return res
+        # sysfs is listed per card and sorted numerically; zipping against the hy-smi
+        # rows is positional, which is safe because both enumerate every device.
+        for card, (used, total) in zip(cards, vram, strict=False):
+            card.mem_used = used / _GIB
+            card.mem_total = total / _GIB
+        for card in cards:
+            card.name = _hy_name(card.mem_total)
+        res.cards = cards
+        if procs:
+            for card in cards:
+                card.procs_known = True
+            # Host-wide, not per-card: appended to the first card so totals and the
+            # process list are both visible, with `procs_shared` telling the UI not to
+            # read it as "card 0 is the busy one".
+            cards[0].procs = procs
+            cards[0].procs_shared = True
+        res.version = _regex_version(body, r"Driver Version:\s*(\S+)")
+        return res
+
+
+#: Bytes per GiB. DCU memory is 144 GiB per card here; reporting MiB would mean
+#: five-digit numbers in a column three wide.
+_GIB = 1024.0**3
+
+
+def _hy_name(mem_gib: float | None) -> str:
+    """``Hygon 144GB`` — the driver's own SKU string is only in ``--showproductname``,
+    which would be a second query for a label."""
+    return f"Hygon {mem_gib:.0f}GB" if mem_gib else "Hygon DCU"
+
+
 class Generic(Family):
     """No accelerator tool answered — CPU-only, or a vendor without a parser yet."""
 
@@ -1109,6 +1217,7 @@ FAMILIES: dict[str, Family] = {
         MooreThreads(),
         Thead(),
         Iluvatar(),
+        Hygon(),
         TsingMicro(),
     )
 }

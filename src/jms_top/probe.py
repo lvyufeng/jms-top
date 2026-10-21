@@ -194,6 +194,38 @@ _THEAD = (
 #: runtime in ``/usr/local/corex/lib`` and fails with a loader error without it, so the
 #: library path is set for the SDK location rather than relying on the environment a
 #: login shell happens to have.
+#: 海光 (Hygon) DCU, C-3000 family. `hy-smi` ships under `/opt/hyhal/bin` — not on
+#: PATH — and prints everything *rate*-like as a percentage: `VRAM%` is 73 on every
+#: card of a machine where the real figures are 104.9 GiB of 144 GiB. So `hy-smi` is
+#: asked only for what it is the only source of (temperature, power, HCU%), and the
+#: memory comes from sysfs, which reports exact bytes per card.
+#:
+#: `hy-smi` has no process table at all (no --showapps, no --showprocess). The kernel
+#: does: every PID with a queue is listed under /sys/class/kfd/kfd/proc, which is the
+#: same information rocm-smi reads.
+_HYGON = (
+    "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
+    "H=$(command -v hy-smi 2>/dev/null); "
+    '[ -n "$H" ] || { [ -x /opt/hyhal/bin/hy-smi ] && H=/opt/hyhal/bin/hy-smi; }; '
+    "if [ -n \"$H\" ]; then echo '##HYGON'; "
+    "out=$($T \"$H\" 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:hygon:6s' || "
+    "printf '%s\\n' \"$out\" | head -{tile_n}; "
+    # sysfs: one line per card, "<card> <used_bytes> <total_bytes>"; ordered by card
+    # number so it can be zipped against the hy-smi rows.
+    "echo '##HYGON-VRAM'; "
+    "for c in /sys/class/drm/card*/device; do "
+    '[ -r "$c/mem_info_vram_total" ] || continue; '
+    'echo "$(basename $(dirname $c)) $(cat $c/mem_info_vram_used) $(cat $c/mem_info_vram_total)"; '
+    "done 2>/dev/null | sort -V; "
+    # KFD: the processes holding a GPU queue, with their command line.
+    "echo '##HYGON-PROCS'; "
+    "for q in /sys/class/kfd/kfd/proc/*/; do "
+    '[ -d "$q" ] || continue; p=${q%/}; p=${p##*/}; '
+    'u=$(stat -c %U "/proc/$p" 2>/dev/null || ps -o user= -p $p 2>/dev/null); '
+    "c=$(tr '\\0' ' ' < \"/proc/$p/cmdline\" 2>/dev/null | cut -c1-64); "
+    '[ -n "$c" ] && echo "$p $u $c"; '
+    "done 2>/dev/null | head -40; fi"
+)
 _ILUVATAR = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "X=$(command -v ixsmi 2>/dev/null); "
@@ -221,6 +253,7 @@ ACCEL_SNIPPETS: dict[str, str] = {
     "tsingmicro": _TSINGMICRO,
     "thead": _THEAD,
     "iluvatar": _ILUVATAR,
+    "hygon": _HYGON,
 }
 
 

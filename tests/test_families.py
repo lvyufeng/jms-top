@@ -354,3 +354,48 @@ def test_iluvatar_is_probed_from_the_corex_path():
     script = build_script("fleet")
     assert "/usr/local/corex/bin/ixsmi" in script
     assert "LD_LIBRARY_PATH=/usr/local/corex/lib" in script
+
+
+# --- Hygon DCU (海光) -----------------------------------------------------------
+
+
+def test_hygon_takes_memory_from_sysfs_not_the_percentage():
+    """`hy-smi` prints memory only as a percentage, and the same one on every card.
+
+    Captured from a BW1000 with one job resident: `VRAM%` reads 59 on card 1 and 0 on
+    its neighbours, but a machine with four jobs prints 73 on all eight, which cannot
+    tell "one job at 73%" from "five jobs". sysfs carries the exact bytes, so the
+    parser takes memory from there and uses hy-smi only for temperature/power/util.
+    """
+    r = FAMILIES["hygon"].parse(load("hygon_bw1000_8busy.txt"))
+    assert r.total == 8
+    assert r.cards[1].mem_total == pytest.approx(64, abs=0.5)
+    assert r.cards[1].mem_used == pytest.approx(38, abs=1)
+    assert r.cards[0].mem_used == pytest.approx(0, abs=0.5)
+    assert r.cards[1].busy is True
+    assert r.free == 6
+
+
+def test_hygon_processes_come_from_kfd_and_are_marked_shared():
+    """hy-smi has no process table; the kernel lists queue holders instead.
+
+    KFD says a process holds a GPU queue but not which card runs it, so the list is
+    host-wide and must be labelled as such — presenting it as card 0's processes would
+    be a fabrication.
+    """
+    r = FAMILIES["hygon"].parse(load("hygon_bw1000_8busy.txt"))
+    procs = r.cards[0].procs
+    assert procs, "no processes parsed from the KFD section"
+    assert r.cards[0].procs_shared is True
+    assert all(p.pid > 0 and p.name for p in procs)
+
+
+def test_hygon_is_probed_from_the_hyhal_path():
+    """`hy-smi` lives in /opt/hyhal/bin, off PATH like four other vendor tools."""
+    from jms_top.probe import build_script
+
+    script = build_script("fleet")
+    assert "/opt/hyhal/bin/hy-smi" in script
+    # Memory and processes come from the kernel, not from the tool.
+    assert "mem_info_vram_used" in script
+    assert "/sys/class/kfd/kfd/proc" in script
