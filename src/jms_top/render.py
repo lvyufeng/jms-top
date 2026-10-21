@@ -103,7 +103,7 @@ def render_table(view: FleetView, *, color: bool = False, group: bool = True) ->
     No box drawing: this output is meant to be grepped and awk'd as much as read, and
     a fixed-width layout with aligned columns gives both.
     """
-    rows = sorted(view.hosts, key=lambda h: h.sort_key)
+    rows = sorted(view.hosts, key=lambda h: h.sort_key())
     head = "".join(
         name.ljust(w) if i == 0 else name.rjust(w) for i, (name, w, _) in enumerate(_COLUMNS)
     )

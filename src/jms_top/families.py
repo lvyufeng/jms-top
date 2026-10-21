@@ -971,18 +971,92 @@ class Thead(Family):
 
 
 class Iluvatar(Family):
+    """天数智芯 BI-V150 and friends (``ixsmi``, corex driver).
+
+    The default table is the nvidia-smi tile layout, two lines per card: name and bus id
+    on the first, temperature / power / memory / utilisation on the second. Two quirks
+    that a copied NVIDIA regex gets wrong:
+
+    * **Power is often ``N/A``.** ``BI-V150`` reports a real wattage for some boards and
+      ``N/A / N/A`` for others, on the same host — a regex that requires ``<n>W/<n>W``
+      silently drops those cards, which reads as "fewer GPUs than the machine has".
+    * **``ixsmi`` lives under ``/usr/local/corex/bin``** and needs ``LD_LIBRARY_PATH``
+      from the same tree, so the probe has to reach for it rather than ``command -v``.
+    """
+
     key = "iluvatar"
     label = "Iluvatar"
     marker = re.compile(r"^##ILUVATAR\b")
 
+    #: Row 1 of a card: ``| 0    Iluvatar BI-V150   | 00000000:10:00.0 | ...``
+    _NAME = re.compile(r"^\|\s*(?P<idx>\d+)\s+(?P<name>Iluvatar\s+\S+)\s*\|\s*[0-9A-Fa-f]{8}:")
+
+    #: Row 2: ``| N/A  32C   P0       92W / 350W   | 68MiB / 32768MiB | 0% ...``
+    #: Power and temperature are each optional because the board may not report them.
+    _STAT = re.compile(
+        r"^\|\s*\S+\s+(?P<temp>\d+)C\s+\S+\s+"
+        r"(?P<power>[\d.]+)W?\s*/\s*[\d.]+W\s*\|\s*"
+        r"(?P<used>\d+)MiB\s*/\s*(?P<total>\d+)MiB\s*\|\s*(?P<util>[\d.]+)%"
+    )
+    #: The same row with no power reading at all.
+    _STAT_NO_POWER = re.compile(
+        r"^\|\s*\S+\s+(?P<temp>\d+)C\s+\S+\s+N/A\s*/\s*N/A\s*\|\s*"
+        r"(?P<used>\d+)MiB\s*/\s*(?P<total>\d+)MiB\s*\|\s*(?P<util>[\d.]+)%"
+    )
+    #: ``|  0    123456     python3    1234MiB |`` in the Processes table.
+    _PROC = re.compile(r"^\|\s*(?P<dev>\d+)\s+(?P<pid>\d+)\s+(?P<name>\S.*?)\s+(?P<mem>\d+)MiB")
+
     def parse(self, body: str) -> AccelResult:
         res = AccelResult(family=self.key, label=self.label)
-        name = re.compile(
-            r"^\|\s*(?P<idx>\d+)\s+(?P<name>Iluvatar\s+\S+)\s+\S+\s*\|\s*[0-9A-Fa-f]{8}:"
-        )
-        res.cards = _tile_cards(body, name, _XPU_STAT)
-        if not res.cards:
+        cards: list[Card] = []
+        by_index: dict[int, Card] = {}
+        pending: Card | None = None
+        in_procs = False
+        for line in body.splitlines():
+            if re.match(r"^\|\s*Processes:", line):
+                in_procs = True
+                continue
+            if in_procs:
+                p = self._PROC.match(line)
+                if p and int(p.group("dev")) in by_index:
+                    by_index[int(p.group("dev"))].procs.append(
+                        Proc(
+                            pid=int(p.group("pid")),
+                            user=None,
+                            name=_shorten(p.group("name")),
+                            mem_mib=_num(p.group("mem")),
+                        )
+                    )
+                continue
+            named = self._NAME.match(line)
+            if named:
+                pending = Card(
+                    index=int(named.group("idx")),
+                    name=" ".join(named.group("name").split()),
+                )
+                cards.append(pending)
+                by_index[pending.index] = pending
+                continue
+            if pending is None:
+                continue
+            stat = self._STAT.match(line) or self._STAT_NO_POWER.match(line)
+            if stat:
+                g = stat.groupdict()
+                pending.temp = _num(g.get("temp"))
+                pending.power = _num(g.get("power"))
+                pending.mem_used = _num(g.get("used"))
+                pending.mem_total = _num(g.get("total"))
+                pending.util = _num(g.get("util"))
+                pending = None
+        if not cards:
             res.error = _first_error(body) or "ixsmi returned no GPU rows"
+            return res
+        if in_procs:
+            # The table printed, so "No running processes found" is a real answer.
+            for card in cards:
+                card.procs_known = True
+        res.cards = cards
+        res.version = _regex_version(body, r"IX-ML:\s*(\S+)")
         return res
 
 

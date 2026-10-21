@@ -189,14 +189,20 @@ _THEAD = (
     "out=$($T \"$P\" 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:thead:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; fi"
 )
+#: 天数智芯 (Iluvatar) BI-V150. ``ixsmi`` ships under ``/usr/local/corex/bin`` and is
+#: **not** on ``PATH`` — same trap as T-Head. Worse, it links against the corex
+#: runtime in ``/usr/local/corex/lib`` and fails with a loader error without it, so the
+#: library path is set for the SDK location rather than relying on the environment a
+#: login shell happens to have.
 _ILUVATAR = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
-    "if command -v ixsmi >/dev/null 2>&1; then echo '##ILUVATAR'; "
-    "out=$($T ixsmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:iluvatar:6s' || "
-    "printf '%s\\n' \"$out\" | head -{tile_n}; "
-    "elif [ -x /usr/local/corex/bin/ixsmi ]; then echo '##ILUVATAR'; "
-    "LD_LIBRARY_PATH=/usr/local/corex/lib:$LD_LIBRARY_PATH "
-    "$T /usr/local/corex/bin/ixsmi 2>/dev/null | head -{tile_n}; fi"
+    "X=$(command -v ixsmi 2>/dev/null); "
+    '[ -n "$X" ] || { [ -x /usr/local/corex/bin/ixsmi ] '
+    "&& X=/usr/local/corex/bin/ixsmi; }; "
+    "if [ -n \"$X\" ]; then echo '##ILUVATAR'; "
+    'out=$(LD_LIBRARY_PATH=/usr/local/corex/lib:${LD_LIBRARY_PATH:-} $T "$X" 2>/dev/null); '
+    "[ $? -eq 124 ] && echo '##STALLED:iluvatar:6s' || "
+    "printf '%s\\n' \"$out\" | head -{tile_n}; fi"
 )
 
 #: Families whose snippet prints ``##<FAMILY>-WIDE`` (a per-type query layout rather

@@ -312,3 +312,45 @@ def test_every_vendor_stall_marker_names_its_own_family():
         labels = re.findall(r"##STALLED:([a-z]+):", template)
         assert labels, f"{family} snippet has no stall marker"
         assert set(labels) == {family}, f"{family} snippet is labelled {labels}"
+
+
+# --- Iluvatar (天数智芯) --------------------------------------------------------
+
+
+def test_iluvatar_tile_layout_from_the_live_fleet():
+    """`ixsmi` on a BI-V150 host: 16 cards, tile layout like nvidia-smi's.
+
+    Captured from corex 4.5.0 / IX-ML 4.4.0. The trap in this one is power: the boards
+    report `92W / 350W` on some cards and `N/A / N/A` on others *in the same host*, so a
+    regex that demands a wattage silently drops half the GPUs and the host looks like it
+    has eight cards.
+    """
+    r = FAMILIES["iluvatar"].parse(load("iluvatar_biv150_16_idle.txt"))
+    assert r.total == 16
+    assert r.free == 16
+    assert r.version == "4.4.0"
+    assert r.cards[0].name == "Iluvatar BI-V150"
+    assert r.cards[0].mem_total == pytest.approx(32768)
+    assert r.cards[0].mem_used == pytest.approx(68)
+    assert r.cards[1].power == pytest.approx(92)  # the card that *does* report power
+    assert r.cards[0].power is None  # ... and the one that does not, kept
+
+
+def test_iluvatar_reading_a_process_makes_the_card_busy():
+    body = load("iluvatar_biv150_16_idle.txt").replace(
+        "|  No running processes found                                                    |",
+        "|    0       12345    python3                                       12000MiB     |",
+    )
+    r = FAMILIES["iluvatar"].parse(body)
+    assert r.cards[0].procs[0].pid == 12345
+    assert r.cards[0].busy is True
+    assert r.free == 15
+
+
+def test_iluvatar_is_probed_from_the_corex_path():
+    """`ixsmi` is under /usr/local/corex/bin and needs that tree's LD_LIBRARY_PATH."""
+    from jms_top.probe import build_script
+
+    script = build_script("fleet")
+    assert "/usr/local/corex/bin/ixsmi" in script
+    assert "LD_LIBRARY_PATH=/usr/local/corex/lib" in script

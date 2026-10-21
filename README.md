@@ -257,7 +257,7 @@ Three rules shape all of this:
 | Moore Threads | `mthreads-gmi` | GPU | yes |
 | TsingMicro | `tsm_smi` | chip (4/card on TX8110) | card-level; process table per card |
 | T-Head PPU | `ppu-smi` | PPU | yes — installed under `/usr/local/PPU_SDK/ppu-smi/bin`, not on `PATH` |
-| Iluvatar | `ixsmi` | GPU | parser written, no live sample yet |
+| Iluvatar (天数) | `ixsmi` | GPU | yes — `/usr/local/corex/bin`, needs `LD_LIBRARY_PATH` |
 | Hygon DCU | `hy-smi` | — | not parsed yet; the CPU side still works |
 
 Which tool to run is decided by the host, not the inventory: every family is probed

@@ -502,7 +502,7 @@ def snapshot(view: FleetView) -> dict:
                 "users": h.users,
                 "top": h.node.top,
             }
-            for h in sorted(view.hosts, key=lambda h: h.sort_key)
+            for h in sorted(view.hosts, key=lambda h: h.sort_key())
         ],
     }
 
