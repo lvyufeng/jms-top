@@ -217,7 +217,7 @@ def test_sort_cycles_through_availability_address_and_kind():
             return seen
 
     assert SORT_MODES[0] == "availability"
-    assert run(go()) == ["availability", "address", "kind", "availability"]
+    assert run(go()) == ["availability", "address", "kind", "state"]
 
 
 def test_address_sort_is_numeric_not_lexicographic():
@@ -314,9 +314,49 @@ def test_clicking_a_header_sorts_and_clicking_again_restores_availability():
 
 
 def test_sortable_headers_are_marked():
-    """Only ADDRESS and KIND respond to a click, so only they get the marker."""
+    """Only the sortable headers get the marker: ADDRESS, KIND and STATE."""
     from jms_top.tui import _header
 
     assert str(_header("ADDRESS")).strip() == "ADDRESS ▾"
     assert str(_header("KIND")).strip() == "KIND ▾"
-    assert str(_header("STATE")).strip() == "STATE"
+    assert str(_header("STATE")).strip() == "STATE ▾"
+    assert str(_header("MEM")).strip() == "MEM"
+
+
+def test_state_sort_keeps_every_verdict_in_one_block():
+    """`STATE` groups by verdict without interleaving, so "show me what is DOWN" works.
+
+    `availability` orders the bands too, but breaks ties on free-card count — a busy
+    host with room and one at 100% land next to each other, and a DOWN host can end up
+    between two busy ones once the scan is mid-flight.
+    """
+    from rich.text import Text
+    from textual.widgets import DataTable
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            # Start from the default and reach `state` the way a user does: one click.
+            table = app.query_one("#table", DataTable)
+            from jms_top.tui import COLUMNS
+
+            idx = COLUMNS.index("STATE")
+            app.on_data_table_header_selected(
+                DataTable.HeaderSelected(table, table.ordered_columns[idx].key, idx, Text("STATE"))
+            )
+            rows = [h.verdict for h in app.visible_hosts()]
+            return rows, app._sort_mode
+
+    verdicts, mode = run(go())
+    assert mode == "state"
+    # Each verdict appears exactly once contiguously.
+    seen: list[str] = []
+    for v in verdicts:
+        if not seen or seen[-1] != v:
+            assert v not in seen, f"{v} appears in two separate blocks"
+            seen.append(v)
+    assert verdicts == sorted(verdicts, key=list(dict.fromkeys(verdicts)).index)

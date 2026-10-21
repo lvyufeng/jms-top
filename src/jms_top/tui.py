@@ -104,10 +104,10 @@ WATCH_HZ = 1.0
 #: column header** — `ADDRESS` sorts by address, `KIND` groups by accelerator — which is
 #: where a reader looks to reorder a table. Clicking the same header again goes back to
 #: availability, so the useful order is always one click away.
-SORT_MODES = ("availability", "address", "kind")
+SORT_MODES = ("availability", "address", "kind", "state")
 
 #: Which column header selects which ordering.
-SORT_COLUMNS = {"ADDRESS": "address", "KIND": "kind"}
+SORT_COLUMNS = {"ADDRESS": "address", "KIND": "kind", "STATE": "state"}
 
 DASH = "—"
 
@@ -311,6 +311,12 @@ class JmsTopApp(App):
         if self._sort_mode == "kind":
             # Within a model, free first: grouping should not bury the useful rows.
             return sorted(hosts, key=lambda h: (h.family_label, h.sort_key(stable=stable)))
+        if self._sort_mode == "state":
+            # Strictly by verdict. `availability` already puts the bands in order, but
+            # it also breaks ties by free-card count, so a busy host with plenty of
+            # memory and one at 100% get interleaved across their band. For "show me
+            # everything that is DOWN" the bands must be contiguous.
+            return sorted(hosts, key=lambda h: (h.sort_key(stable=stable)[0], h.name))
         return sorted(hosts, key=lambda h: h.sort_key(stable=stable))
 
     def _matches(self, host: HostView) -> bool:

@@ -196,7 +196,7 @@ queue rounds back to back.
 | `r` | run a full round now |
 | `space` | pause / resume polling (the screen keeps showing what it has) |
 | `i` / `o` | poll **slower** / **faster** (interval ×2 / ÷2, clamped to 1–60 s) |
-| click `ADDRESS` / `KIND` | sort by address / group by accelerator (click again → back to availability) |
+| click `ADDRESS` / `KIND` / `STATE` | sort by address / group by accelerator / group by state (click again → back to availability) |
 | `ctrl+r` | reload the UI from source now (normally automatic — see below) |
 | `q` | quit |
 
