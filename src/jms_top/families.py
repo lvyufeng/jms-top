@@ -1142,14 +1142,25 @@ class Hygon(Family):
     _VRAM = re.compile(r"^card(?P<card>\d+)\s+(?P<used>\d+)\s+(?P<total>\d+)\s*$")
     #: ``2817478 root /usr/bin/python3 -u /cluster/train.py …``
     _PROC = re.compile(r"^(?P<pid>\d+)\s+(?P<user>\S+)\s+(?P<cmd>.+)$")
+    #: ``HCU[0]		: Card Series:		 BW1101``
+    _SERIES = re.compile(r"Card Series:\s*(?P<series>\S+)")
 
     def parse(self, body: str) -> AccelResult:
         res = AccelResult(family=self.key, label=self.label)
         cards: list[Card] = []
         vram: list[tuple[int, int]] = []
         procs: list[Proc] = []
+        model: str | None = None
         section = ""
         for line in body.splitlines():
+            if line.startswith("##HYGON-MODEL"):
+                section = "model"
+                continue
+            if section == "model":
+                m = self._SERIES.search(line)
+                if m and model is None:
+                    model = m.group("series")
+                continue
             if line.startswith("##HYGON-VRAM"):
                 section = "vram"
                 continue
@@ -1191,8 +1202,12 @@ class Hygon(Family):
             # "0G" for a 144 GB card.
             card.mem_used = used / _MIB
             card.mem_total = total / _MIB
+        # `--showproductname` is not consistent across SKUs: bw1100 reports `BW1101`
+        # while bw1000 reports just `BW`. Short is not wrong — `BW` is the family the
+        # tool knows about — so it is kept and the size appended, giving `BW 64GB`
+        # rather than a bare size that loses the series name entirely.
         for card in cards:
-            card.name = _hy_name(card.mem_total)
+            card.name = _hy_name(model, card.mem_total)
         res.cards = cards
         if procs:
             for card in cards:
@@ -1210,10 +1225,11 @@ class Hygon(Family):
 _MIB = 1024.0**2
 
 
-def _hy_name(mem_mib: float | None) -> str:
-    """``Hygon 144GB`` — the driver's own SKU string is only in ``--showproductname``,
-    which would be a second query for a label."""
-    return f"Hygon {mem_mib / 1024:.0f}GB" if mem_mib else "Hygon DCU"
+def _hy_name(series: str | None, mem_mib: float | None) -> str:
+    """``BW1101`` when the tool knows the SKU, else ``BW 64GB``, else the size alone."""
+    size = f"{mem_mib / 1024:.0f}GB" if mem_mib else ""
+    parts = [p for p in (series, size) if p]
+    return " ".join(parts) or "Hygon DCU"
 
 
 class Generic(Family):

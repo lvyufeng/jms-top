@@ -502,3 +502,45 @@ def test_iluvatar_is_found_under_a_versioned_corex_root():
     # root derived from the binary, so lib/ matches it
     assert "R=${X%/bin/*}" in script
     assert "LD_LIBRARY_PATH=$R/lib" in script
+
+
+# --- model strings ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "family,fixture,expect",
+    [
+        ("nvidia", "nvidia_a800.txt", "A800-SXM4-80GB"),
+        ("iluvatar", "iluvatar_biv150_16_idle.txt", "BI-V150"),
+        ("thead", "thead_zw810e_16_idle.txt", "PPU-ZW810E"),
+        ("kunlunxin", "kunlunxin_p800_13.txt", "P800 OAM"),
+        ("metax", "metax_mc550_111.txt", "C550"),
+        # `Ascend910` loses its suffix to `910`, which reads worse beside the vendor
+        # name than the whole string does.
+        ("ascend", "ascend_910c_108.txt", "Ascend910"),
+        ("mthreads", "mthreads_16_idle.txt", "MTT S5000"),
+        ("enflame", "enflame_s60.txt", "ZIXIAOC200"),
+    ],
+)
+def test_model_cell_shows_the_part_without_repeating_the_vendor(family, fixture, expect):
+    """The MODEL column answers "which card", next to a column that says "whose"."""
+    from jms_top.model import HostView
+    from jms_top.render import model_cell
+
+    accel = FAMILIES[family].parse(load(fixture))
+    assert model_cell(HostView(name="h", accel=accel)) == expect
+
+
+def test_hygon_model_keeps_the_series_and_adds_the_size():
+    """`--showproductname` reports `BW1101` on bw1100 and only `BW` on bw1000.
+
+    Short is not wrong — it is what the tool knows — so the series is kept and the
+    capacity appended rather than replaced by a bare size.
+    """
+    from jms_top.model import HostView
+    from jms_top.render import model_cell
+
+    r = FAMILIES["hygon"].parse(load("hygon_bw1000_8busy.txt"))
+    assert r.cards[0].name.startswith("BW")
+    assert "64GB" in r.cards[0].name
+    assert model_cell(HostView(name="h", accel=r)) == "BW 64GB"

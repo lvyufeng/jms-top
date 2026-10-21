@@ -66,6 +66,7 @@ COLUMNS = (
     "HOST",
     "ADDRESS",
     "KIND",
+    "MODEL",
     "CARD #",
     "CARDS",
     "VRAM",
@@ -116,6 +117,7 @@ COLUMN_WIDTHS = {
     "HOST": 20,
     "ADDRESS": 17,
     "KIND": 13,
+    "MODEL": 20,
     "CARD #": 9,
     "CARDS": 9,
     "VRAM": 9,
@@ -144,6 +146,16 @@ def _header(col: str) -> Text:
     if col in SORT_COLUMNS:
         return Text(f"{col} ▾", style="underline")
     return Text(col)
+
+
+def _model_cell(host: HostView) -> str:
+    """The accelerator's own model string, e.g. ``A800-SXM4-80GB``.
+
+    Same rule as :func:`jms_top.render.model_cell` — KIND already names the vendor.
+    """
+    from .render import model_cell
+
+    return model_cell(host)
 
 
 def _cards_cell(host: HostView) -> str:
@@ -577,6 +589,7 @@ class JmsTopApp(App):
             row_text(host.name, verdict),
             row_text(_address_cell(host), verdict),
             row_text(host.family_label, verdict),
+            row_text(_model_cell(host), verdict),
             row_text(_map(host), verdict),
             row_text(cards, verdict),
             row_text(_vram(host), verdict),

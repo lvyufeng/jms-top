@@ -224,7 +224,10 @@ _HYGON = (
     'u=$(stat -c %U "/proc/$p" 2>/dev/null || ps -o user= -p $p 2>/dev/null); '
     "c=$(tr '\\0' ' ' < \"/proc/$p/cmdline\" 2>/dev/null | cut -c1-64); "
     '[ -n "$c" ] && echo "$p $u $c"; '
-    "done 2>/dev/null | head -40; fi"
+    "done 2>/dev/null | head -40; "
+    # The SKU string lives only here: `Card Series: BW1101`, which is the model people
+    # ask for. The summary table above has no name column at all.
+    "echo '##HYGON-MODEL'; $T \"$H\" --showproductname 2>/dev/null | head -4; fi"
 )
 #: 天数智芯 (Iluvatar) BI-V150. Two traps, both seen on the live fleet:
 #:

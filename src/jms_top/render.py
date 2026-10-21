@@ -77,6 +77,32 @@ def _users_cell(view: HostView) -> str:
     return (accel or logins or "-")[:17]
 
 
+def model_cell(v) -> str:  # noqa: ANN001
+    """The accelerator's own model string, without the vendor prefix.
+
+    The PLATFORM column beside it already names the vendor, so `NVIDIA A800-SXM4-80GB`
+    would repeat it. A prefix is stripped when the remainder is still a plausible part
+    number — `Ascend910` beside `Ascend` says nothing twice, while `MetaX 55` must not
+    collapse to `55`.
+    """
+    name = v.card_name
+    if not name:
+        return DASH
+    label = v.family_label
+    for prefix in (label, label.split()[0] if label else ""):
+        if not prefix or not name.lower().startswith(prefix.lower()):
+            continue
+        rest = name[len(prefix) :].strip(" -")
+        # Keep the remainder when it still identifies the part on its own: at least
+        # four characters, which `H800`, `BI-V150` and `A800-SXM4-80GB` manage. A bare
+        # `910` (from `Ascend910`) or `55` does not — in those cases the full string
+        # reads better than a fragment beside a vendor name it would repeat.
+        if len(rest) >= 4:
+            return rest
+        break
+    return name
+
+
 def cards_cell(v) -> str:  # noqa: ANN001
     """``8/8`` — free/physical boards, not free/devices.
 
@@ -109,7 +135,9 @@ _COLUMNS = [
     ("HOST", 26, lambda v: v.name),
     # The address, not the inventory key: `ssh`/`ping` need something that resolves.
     ("ADDRESS", 15, lambda v: v.address or DASH),
-    ("PLATFORM", 14, lambda v: v.family_label),
+    ("PLATFORM", 13, lambda v: v.family_label),
+    # The vendor is the PLATFORM column; this is the part itself.
+    ("MODEL", 20, lambda v: model_cell(v)),
     ("VERDICT", 10, lambda v: verdict_cell(v)),
     ("CARDS", 8, lambda v: cards_cell(v)),
     # Capacity and occupancy: an 8 x 24 GB box and an 8 x 144 GB one are the same

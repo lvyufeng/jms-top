@@ -6,9 +6,9 @@ HCU     Temp     AvgPwr     Perf     PwrCap     VRAM%      HCU%      Dec%      E
 0       51.0C    88.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
 1       50.0C    91.0W      auto     1000.0W    59%        0.0%      0.0%      0.0%      Normal   
 2       51.0C    92.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
-3       49.0C    89.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
+3       51.0C    89.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
 4       52.0C    87.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
-5       54.0C    82.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
+5       53.0C    82.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
 6       52.0C    86.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
 7       52.0C    93.0W      auto     1000.0W    0%         0.0%      0.0%      0.0%      Normal   
 ================================================================================================
@@ -25,3 +25,8 @@ card8 2666496 68702699520
 ##HYGON-PROCS
 3154114 root /usr/bin/python3 /usr/local/bin/vllm serve /models/merge_rl_merg
 3155194 root VLLM::EngineCore                                                
+##HYGON-MODEL
+
+================================= System Management Interface ==================================
+================================================================================================
+HCU[0]		: Card Series:		 BW
