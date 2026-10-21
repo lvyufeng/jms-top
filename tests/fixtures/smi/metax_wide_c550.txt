@@ -1,0 +1,154 @@
+GPU#0  MXC550  0000:2b:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 47663812 KB
+        vis_vram usage                            : 71 %
+        vram total                                : 67108864 KB
+        vram used                                 : 47663812 KB
+        vram usage                                : 71 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+GPU#1  MXC550  0000:3a:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 48909004 KB
+        vis_vram usage                            : 72.8 %
+        vram total                                : 67108864 KB
+        vram used                                 : 48909004 KB
+        vram usage                                : 72.8 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+GPU#2  MXC550  0000:4d:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 48845520 KB
+        vis_vram usage                            : 72.7 %
+        vram total                                : 67108864 KB
+        vram used                                 : 48845520 KB
+        vram usage                                : 72.7 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+GPU#3  MXC550  0000:5c:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 49459916 KB
+        vis_vram usage                            : 73.7 %
+        vram total                                : 67108864 KB
+        vram used                                 : 49459916 KB
+        vram usage                                : 73.7 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+GPU#4  MXC550  0000:aa:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 48884432 KB
+        vis_vram usage                            : 72.8 %
+        vram total                                : 67108864 KB
+        vram used                                 : 48884432 KB
+        vram usage                                : 72.8 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+GPU#5  MXC550  0000:ba:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 49498828 KB
+        vis_vram usage                            : 73.7 %
+        vram total                                : 67108864 KB
+        vram used                                 : 49498828 KB
+        vram usage                                : 73.7 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+GPU#6  MXC550  0000:ca:00.0
+    Memory
+        vis_vram total                            : 67108864 KB
+        vis_vram used                             : 48904908 KB
+        vis_vram usage                            : 72.8 %
+        vram total                                : 67108864 KB
+        vram used                                 : 48904908 KB
+        vram usage                                : 72.8 %
+        xtt total                                 : 792357483 KB
+        xtt used                                  : 26348888 KB
+        xtt usage                                 : 3.3 %
+
+mx-smi  version: 2.3.1
+
+=================== MetaX System Management Interface Log ===================
+Timestamp                                         : Wed Oct 21 12:14:34 2026
+
+Attached GPUs                                     : 8
+GPU#0  MXC550  0000:2b:00.0
+    Utilization
+        GPU                                       : 0 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#1  MXC550  0000:3a:00.0
+    Utilization
+        GPU                                       : 0 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#2  MXC550  0000:4d:00.0
+    Utilization
+        GPU                                       : 27 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#3  MXC550  0000:5c:00.0
+    Utilization
+        GPU                                       : 27 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#4  MXC550  0000:aa:00.0
+    Utilization
+        GPU                                       : 27 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#5  MXC550  0000:ba:00.0
+    Utilization
+        GPU                                       : 27 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#6  MXC550  0000:ca:00.0
+    Utilization
+        GPU                                       : 27 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+GPU#7  MXC550  0000:da:00.0
+    Utilization
+        GPU                                       : 27 %
+        VPUE                                      : 0 %
+        VPUD                                      : 0 %
+
+End of Log
+| Process:                                                                        |
+|  GPU                    PID         Process Name                 GPU Memory     |
+|                                                                  Usage(MiB)     |
+|=================================================================================|
+|  0                  2744908         python3.12                   45634          |
+|  1                  2744909         python3.12                   46850          |
+|  2                  2744910         python3.12                   46788          |
+|  3                  2744911         python3.12                   47388          |
+|  4                  2744919         python3.12                   46826          |
+|  5                  2744920         python3.12                   47426          |
+|  6                  2744921         python3.12                   46846          |
+|  7                  2744922         python3.12                   46142          |
++---------------------------------------------------------------------------------+
+
+End of Log

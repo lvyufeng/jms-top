@@ -1,0 +1,105 @@
+/* jms-top — nvitop's density, a fleet's worth of hosts.
+
+   Layout, top to bottom:
+     title bar    fleet identity, connection and poll state, summary counters
+     body         the host table (flex) | the cards panel for the selected host
+     detail       open-slot info for the selected host: cards, processes, health
+     footer       keys and the activity log tail
+
+   Colours are used for one job only: state. free=green, partial=yellow,
+   busy=red, residual=orange, unknown=magenta (never green), down=dim. A row's
+   colour is its verdict, so "is anything free" is answerable from arm's length.
+*/
+
+Screen {
+    background: $surface;
+}
+
+#titlebar {
+    height: 1;
+    background: $panel;
+    color: $text;
+    padding: 0 1;
+}
+
+#titlebar.explore {
+    background: $warning-darken-2;
+    color: $text;
+}
+
+#body {
+    height: 1fr;
+}
+
+#fleet-pane {
+    width: 1fr;
+    height: 1fr;
+}
+
+#table {
+    height: 1fr;
+    background: $surface;
+    scrollbar-size-vertical: 1;
+}
+
+#table > .datatable--header {
+    background: $panel;
+    color: $text-muted;
+    text-style: bold;
+}
+
+#table > .datatable--cursor {
+    background: $accent 40%;
+    color: $text;
+}
+
+#table > .datatable--hover {
+    background: $accent 20%;
+}
+
+#side {
+    width: 46;
+    height: 1fr;
+    background: $panel;
+    padding: 0 1;
+}
+
+#side-title {
+    height: 1;
+    color: $text-muted;
+    text-style: bold;
+}
+
+#cards {
+    height: auto;
+    background: $panel;
+}
+
+#detail {
+    height: auto;
+    max-height: 14;
+    background: $boost;
+    padding: 0 1;
+}
+
+#footer-bar {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+.hidden {
+    display: none;
+}
+
+/* The command bar replaces the footer while typing a filter. */
+#command {
+    height: 3;
+    background: $panel;
+    padding: 0 1;
+}
+
+#command.hidden {
+    display: none;
+}

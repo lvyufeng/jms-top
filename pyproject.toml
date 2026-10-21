@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jms-top"
+version = "0.1.0"
+description = "nvitop-style TUI for a JumpServer fleet: see which of your reachable machines are actually free, live"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "lvyufeng" }]
+keywords = ["jumpserver", "tui", "textual", "gpu", "npu", "nvitop", "monitoring", "cluster"]
+
+dependencies = [
+    # The SSH data plane, inventory and per-vendor probe definitions are lifted from
+    # jms-bridge rather than re-implemented: one KoKo login-string grammar, one
+    # ControlMaster policy, one set of SMI commands that are already pinned by that
+    # project's tests. jms-top is a *view* over that data plane, not a second copy.
+    "jms-agent-bridge>=0.2.2,<0.3",
+    "textual>=0.80,<9",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+# Pinned exactly: this is the test environment, so a run means the same thing everywhere.
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.15.12",
+]
+
+[project.scripts]
+jms-top = "jms_top.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/lvyufeng/jms-top"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jms_top"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# PROBE_SNIPPET is a bash script kept in a string: its pipelines are long by
+# nature and wrapping them would obscure the shell rather than help the reader.
+"src/jms_top/probe.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# src layout: the package is importable without an editable install, so `pytest`
+# works on a fresh clone before `pip install -e .` has been run.
+pythonpath = ["src"]
