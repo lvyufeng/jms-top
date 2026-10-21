@@ -171,12 +171,25 @@ def test_mthreads_idle_and_busy():
 # --- TsingMicro ---------------------------------------------------------------
 
 
+def test_tsingmicro_parses_every_chip_not_just_the_first_of_each_card():
+    """`tsm_smi` prints a TX8110's card id on its *first* chip row only.
+
+    The other three rows leave the name cell blank, and a pattern that demanded a card
+    id on every row parsed 8 of 32 chips — one per board — so an 8-card machine read as
+    eight near-empty devices and every count derived from it was wrong.
+    """
+    r = FAMILIES["tsingmicro"].parse(load("tsingmicro_137.txt"))
+    assert r.total == 32, "chips, which is what tsm_smi counts"
+    assert [c.index for c in r.cards] == list(range(32))
+    assert r.physical_cards == 8
+    assert r.chips_per_card == 4
+
+
 def test_tsingmicro_is_residual_not_free():
     """0% util but 90% memory and no process: the memory is not actually available."""
     r = FAMILIES["tsingmicro"].parse(load("tsingmicro_137.txt"))
-    assert r.total == 8  # one chip per card on this SKU
     assert r.free == 0
-    assert r.residual == 8
+    assert r.residual == 32
     assert all(c.residual for c in r.cards)
 
 
@@ -194,7 +207,7 @@ def test_tsingmicro_is_residual_not_free():
         ("enflame", "enflame_s60.txt", 8),
         ("mthreads", "mthreads_16_idle.txt", 8),
         ("mthreads", "mthreads_s5000_17.txt", 8),
-        ("tsingmicro", "tsingmicro_137.txt", 8),
+        ("tsingmicro", "tsingmicro_137.txt", 32),
     ],
 )
 def test_every_card_is_classified(family, fixture, expect_total):
@@ -445,3 +458,28 @@ def test_vram_cell_reports_capacity_and_occupancy():
     assert cell.startswith("64G"), cell
     assert cell.endswith("%"), cell
     assert vram_cell(HostView(name="no-accel")) == "—"
+
+
+def test_multi_chip_boards_report_boards_not_devices():
+    """A box everyone calls "8 cards" must not display as 32.
+
+    TsingMicro counts devices (chips), four per TX8110. The CARDS column says
+    `0/8×4` — boards, then chips per board — while the map and the counters stay at
+    the device level, because that is the resolution utilisation is reported at.
+    """
+    from jms_top.model import HostView
+    from jms_top.render import card_cells, cards_cell
+    from jms_top.scan import parse_reply
+
+    view = parse_reply(HostView(name="tx8110-137"), load("tsingmicro_137.txt"))
+    assert view.accel is not None
+    assert view.accel.total == 32
+    assert view.accel.physical_cards == 8
+    assert cards_cell(view) == "0/8×4"
+    assert len(card_cells(view)) == 32
+
+    # A vendor that reports one device per board keeps the plain form: `free/total`
+    # with no `×n` suffix, because there is nothing to multiply.
+    single = HostView(name="a800", accel=FAMILIES["nvidia"].parse(load("nvidia_a800.txt")))
+    assert single.accel.chips_per_card == 1
+    assert "×" not in cards_cell(single)

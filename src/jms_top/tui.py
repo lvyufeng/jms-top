@@ -146,6 +146,13 @@ def _header(col: str) -> Text:
     return Text(col)
 
 
+def _cards_cell(host: HostView) -> str:
+    """Free boards over total boards; ``8/8×4`` when a board holds several chips."""
+    from .render import cards_cell
+
+    return cards_cell(host)
+
+
 def _vram(host: HostView) -> str:
     """Per-card capacity and how much of it the host is using, e.g. ``144G 73%``.
 
@@ -563,7 +570,7 @@ class JmsTopApp(App):
 
     def _cells(self, host: HostView) -> list[Text]:
         verdict = host.verdict
-        cards = f"{host.free_cards}/{host.total}" if host.total else DASH
+        cards = _cards_cell(host)
         users = ",".join(host.users) or ",".join(sorted(set(host.node.logins)))
         load = None if host.node.load_per_cpu is None else host.node.load_per_cpu * 100
         return [

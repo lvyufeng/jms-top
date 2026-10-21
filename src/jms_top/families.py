@@ -167,6 +167,21 @@ class AccelResult:
         return len(self.cards)
 
     @property
+    def physical_cards(self) -> int:
+        """How many boards the chips sit on.
+
+        Equal to ``total`` for the vendors that report one device per board. TsingMicro
+        reports four chips per TX8110, so a box that everyone calls "8 cards" has 32
+        devices — printing 32 in the CARDS column would read as a 32-card machine.
+        """
+        boards = {c.card for c in self.cards if c.card is not None}
+        return len(boards) if boards else self.total
+
+    @property
+    def chips_per_card(self) -> int:
+        return self.total // self.physical_cards if self.physical_cards else 1
+
+    @property
     def busy(self) -> int:
         return sum(1 for c in self.cards if c.busy is True)
 
@@ -886,8 +901,12 @@ _TSM_ROW = re.compile(
     r"[0-9A-Fa-f]{4}:[0-9A-Fa-f]{2}:[0-9A-Fa-f:.]+\s+(?P<temp>\d+)C\s+(?P<pw>\d+)W\s*/\s*(?P<cap>\d+)W\s+"
     r"(?P<used>[\d.]+)M\s*/\s*(?P<total>[\d.]+)M\s+(?P<util>\d+)%"
 )
+#: The card-number prefix is optional *as a whole*: `tsm_smi` prints the card id on a
+#: TX8110's first chip row only, and the other three rows begin with a blank name cell.
+#: Requiring `card` + `cname` for every row parsed 8 of 32 chips on a real machine —
+#: one per card — so the host looked like it had eight half-empty devices.
 _TSM_ROW_FLAT = re.compile(
-    r"^\|\s*(?:(?P<card>\d+)\s+(?P<cname>TX\S+)\s*\|\s*)(?P<chip>\d+)\s+"
+    r"^\|\s*(?:(?P<card>\d+)\s+(?P<cname>TX\S+)\s*\|)?\s*\|?\s*(?P<chip>\d+)\s+"
     r"[0-9A-Fa-f]{4}:[0-9A-Fa-f]{2}:[0-9A-Fa-f:.]+\s+(?P<temp>\d+)C\s+(?P<pw>\d+)W\s*/\s*(?P<cap>\d+)W\s+"
     r"(?P<used>[\d.]+)M\s*/\s*(?P<total>[\d.]+)M\s+(?P<util>\d+)%"
 )

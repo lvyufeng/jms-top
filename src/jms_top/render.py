@@ -77,6 +77,23 @@ def _users_cell(view: HostView) -> str:
     return (accel or logins or "-")[:17]
 
 
+def cards_cell(v) -> str:  # noqa: ANN001
+    """``8/8`` — free/physical boards, not free/devices.
+
+    TsingMicro reports four chips per TX8110, so its device count (32) would read as a
+    32-card machine. The chip count is still what the MAP below draws, because that is
+    the level at which utilisation is reported.
+    """
+    accel = v.accel
+    if accel is None or not accel.total:
+        return DASH
+    boards = accel.physical_cards
+    if boards == accel.total:
+        return f"{v.free_cards}/{v.total}"
+    free_boards = len({c.card for c in accel.cards if c.busy is False and c.card is not None})
+    return f"{free_boards}/{boards}×{accel.chips_per_card}"
+
+
 def vram_cell(v) -> str:  # noqa: ANN001
     """``144G 73%`` — per-card capacity, then how much of it is held."""
     per_card = v.vram_per_card
@@ -94,7 +111,7 @@ _COLUMNS = [
     ("ADDRESS", 15, lambda v: v.address or DASH),
     ("PLATFORM", 14, lambda v: v.family_label),
     ("VERDICT", 10, lambda v: verdict_cell(v)),
-    ("CARDS", 8, lambda v: f"{v.free_cards}/{v.total}" if v.total else DASH),
+    ("CARDS", 8, lambda v: cards_cell(v)),
     # Capacity and occupancy: an 8 x 24 GB box and an 8 x 144 GB one are the same
     # "8 cards" without it.
     ("VRAM", 9, lambda v: vram_cell(v)),
