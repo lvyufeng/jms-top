@@ -77,6 +77,17 @@ def _users_cell(view: HostView) -> str:
     return (accel or logins or "-")[:17]
 
 
+def vram_cell(v) -> str:  # noqa: ANN001
+    """``144G 73%`` — per-card capacity, then how much of it is held."""
+    per_card = v.vram_per_card
+    if not per_card:
+        return DASH
+    used, total = v.vram_used, v.vram_total
+    if used is None or not total:
+        return f"{per_card / 1024:.0f}G"
+    return f"{per_card / 1024:.0f}G {used / total * 100:.0f}%"
+
+
 _COLUMNS = [
     ("HOST", 26, lambda v: v.name),
     # The address, not the inventory key: `ssh`/`ping` need something that resolves.
@@ -84,6 +95,9 @@ _COLUMNS = [
     ("PLATFORM", 14, lambda v: v.family_label),
     ("VERDICT", 10, lambda v: verdict_cell(v)),
     ("CARDS", 8, lambda v: f"{v.free_cards}/{v.total}" if v.total else DASH),
+    # Capacity and occupancy: an 8 x 24 GB box and an 8 x 144 GB one are the same
+    # "8 cards" without it.
+    ("VRAM", 9, lambda v: vram_cell(v)),
     ("MAP", 17, lambda v: card_cells(v) or DASH),
     (
         "LOAD",

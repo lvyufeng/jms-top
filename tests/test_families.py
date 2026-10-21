@@ -369,9 +369,10 @@ def test_hygon_takes_memory_from_sysfs_not_the_percentage():
     """
     r = FAMILIES["hygon"].parse(load("hygon_bw1000_8busy.txt"))
     assert r.total == 8
-    assert r.cards[1].mem_total == pytest.approx(64, abs=0.5)
-    assert r.cards[1].mem_used == pytest.approx(38, abs=1)
-    assert r.cards[0].mem_used == pytest.approx(0, abs=0.5)
+    # Stored in MiB like every other family — 64 GiB is 65520 MiB here, not 63.98.
+    assert r.cards[1].mem_total == pytest.approx(65520, abs=64)
+    assert r.cards[1].mem_used == pytest.approx(38 * 1024, rel=0.02)
+    assert r.cards[0].mem_used == pytest.approx(2, abs=2)
     assert r.cards[1].busy is True
     assert r.free == 6
 
@@ -399,3 +400,48 @@ def test_hygon_is_probed_from_the_hyhal_path():
     # Memory and processes come from the kernel, not from the tool.
     assert "mem_info_vram_used" in script
     assert "/sys/class/kfd/kfd/proc" in script
+
+
+def test_multi_section_families_get_all_their_sections():
+    """`##HYGON-VRAM` and `##HYGON-PROCS` must reach the parser with `##HYGON`.
+
+    They arrive as separate sections, and passing only the first one dropped both the
+    memory figures and the process list — the host showed eight cards with no VRAM at
+    all, which is exactly the "information is missing" problem this family exists to
+    fix.
+    """
+    from jms_top.model import HostView
+    from jms_top.scan import parse_reply
+
+    text = load("hygon_bw1000_8busy.txt")
+    view = parse_reply(HostView(name="bw1000-33"), text)
+    assert view.accel is not None and view.accel.total == 8
+    assert view.vram_per_card == pytest.approx(65520, abs=64)
+    assert view.vram_total == pytest.approx(8 * 65520, abs=512)
+    assert view.accel.cards[0].procs, "processes were dropped with their section"
+
+
+def test_section_markers_do_not_leak_between_families():
+    """`HYGON` is a prefix of `HYGON-VRAM`; `THEAD` must not match `THEADX`."""
+    from jms_top.scan import _belongs
+
+    assert _belongs("HYGON", "hygon")
+    assert _belongs("HYGON-VRAM", "hygon")
+    assert _belongs("HYGON-PROCS", "hygon")
+    assert _belongs("NVIDIA-WIDE", "nvidia")
+    assert not _belongs("SYS", "hygon")
+    assert not _belongs("THEADX", "thead")
+    assert not _belongs("NVIDIA", "ascend")
+
+
+def test_vram_cell_reports_capacity_and_occupancy():
+    """An 8 x 24 GB box and an 8 x 144 GB one are both "8 cards" without this."""
+    from jms_top.model import HostView
+    from jms_top.render import vram_cell
+    from jms_top.scan import parse_reply
+
+    view = parse_reply(HostView(name="bw1100-2"), load("hygon_bw1000_8busy.txt"))
+    cell = vram_cell(view)
+    assert cell.startswith("64G"), cell
+    assert cell.endswith("%"), cell
+    assert vram_cell(HostView(name="no-accel")) == "—"

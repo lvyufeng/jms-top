@@ -1167,8 +1167,11 @@ class Hygon(Family):
         # sysfs is listed per card and sorted numerically; zipping against the hy-smi
         # rows is positional, which is safe because both enumerate every device.
         for card, (used, total) in zip(cards, vram, strict=False):
-            card.mem_used = used / _GIB
-            card.mem_total = total / _GIB
+            # Stored as MiB like every other family: `Card.mem_*` is MiB throughout, and
+            # keeping one vendor in GiB made the panels divide by 1024 again and print
+            # "0G" for a 144 GB card.
+            card.mem_used = used / _MIB
+            card.mem_total = total / _MIB
         for card in cards:
             card.name = _hy_name(card.mem_total)
         res.cards = cards
@@ -1184,15 +1187,14 @@ class Hygon(Family):
         return res
 
 
-#: Bytes per GiB. DCU memory is 144 GiB per card here; reporting MiB would mean
-#: five-digit numbers in a column three wide.
-_GIB = 1024.0**3
+#: Bytes per MiB. `Card.mem_*` is MiB for every family; sysfs reports bytes.
+_MIB = 1024.0**2
 
 
-def _hy_name(mem_gib: float | None) -> str:
+def _hy_name(mem_mib: float | None) -> str:
     """``Hygon 144GB`` — the driver's own SKU string is only in ``--showproductname``,
     which would be a second query for a label."""
-    return f"Hygon {mem_gib:.0f}GB" if mem_gib else "Hygon DCU"
+    return f"Hygon {mem_mib / 1024:.0f}GB" if mem_mib else "Hygon DCU"
 
 
 class Generic(Family):

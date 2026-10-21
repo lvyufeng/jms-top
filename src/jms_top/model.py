@@ -118,6 +118,29 @@ class HostView:
         return len(self.cards)
 
     @property
+    def vram_used(self) -> float | None:
+        """MiB held across every card, or None if no card reported memory."""
+        vals = [c.mem_used for c in self.cards if c.mem_used is not None]
+        return sum(vals) if vals else None
+
+    @property
+    def vram_total(self) -> float | None:
+        """MiB of accelerator memory on the host, or None if unreported.
+
+        Shown in the table so the size of a machine is visible at a glance: a host
+        with 8 x 144 GB and one with 8 x 24 GB look identical when only the card
+        count is displayed.
+        """
+        vals = [c.mem_total for c in self.cards if c.mem_total]
+        return sum(vals) if vals else None
+
+    @property
+    def vram_per_card(self) -> float | None:
+        """MiB per card — the number people quote ("an 80G card")."""
+        vals = [c.mem_total for c in self.cards if c.mem_total]
+        return max(vals) if vals else None
+
+    @property
     def free_cards(self) -> int:
         return sum(1 for c in self.cards if c.busy is False)
 

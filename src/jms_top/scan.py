@@ -158,6 +158,19 @@ def parse_disk(line: str) -> tuple[float | None, float | None]:
     return (float(pct.group(1)) if pct else None), free_gib
 
 
+def _belongs(marker: str, family: str) -> bool:
+    """Whether a section marker belongs to ``family``.
+
+    ``##HYGON``, ``##HYGON-VRAM`` and ``##HYGON-PROCS`` are all the family's; ``##SYS``
+    is not. Matching on ``FAMILY`` or ``FAMILY-`` avoids the trap where ``HYGON`` is a
+    prefix of ``HYGON-VRAM`` and a looser test silently pulls in other families'
+    sections (`##THEAD` vs nothing, but `##NVIDIA` vs `##NVIDIA-WIDE` both belong).
+    """
+    up = marker.upper()
+    fam = family.upper()
+    return up == fam or up.startswith(f"{fam}-")
+
+
 def parse_reply(view: HostView, text: str, *, stamp: float | None = None) -> HostView:
     """Fill ``view`` from one probe reply. Mutates and returns it.
 
@@ -225,7 +238,12 @@ def parse_reply(view: HostView, text: str, *, stamp: float | None = None) -> Hos
         present = [k for k in keys if k in sections]
         if not present:
             continue
-        body = "\n".join(sections[present[0]])
+        # Every section belonging to this family, not just the first: a vendor that
+        # needs more than one tool builds several (`##HYGON`, `##HYGON-VRAM`,
+        # `##HYGON-PROCS` — memory from sysfs, processes from KFD). Their markers keep
+        # the family name as a prefix, and the parser reads them by name.
+        parts = [f"##{k}\n" + "\n".join(sections[k]) for k in sections if _belongs(k, fam)]
+        body = "\n".join(parts)
         # A stalled tool prints no marker of its own, so the section may be empty and
         # the reason recorded above is still the answer.
         if not body.strip() and not stalled:

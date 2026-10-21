@@ -68,6 +68,7 @@ COLUMNS = (
     "KIND",
     "CARD #",
     "CARDS",
+    "VRAM",
     "STATE",
     "LOAD",
     "MEM",
@@ -117,6 +118,7 @@ COLUMN_WIDTHS = {
     "KIND": 13,
     "CARD #": 9,
     "CARDS": 9,
+    "VRAM": 9,
     "STATE": 9,
     "LOAD": 6,
     "MEM": 6,
@@ -142,6 +144,26 @@ def _header(col: str) -> Text:
     if col in SORT_COLUMNS:
         return Text(f"{col} ▾", style="underline")
     return Text(col)
+
+
+def _vram(host: HostView) -> str:
+    """Per-card capacity and how much of it the host is using, e.g. ``144G 73%``.
+
+    Capacity is what distinguishes an 8 x 24 GB box from an 8 x 144 GB one; the
+    percentage is what says whether the memory is actually taken. Both, or the column
+    answers only half the question a reader has.
+    """
+    accel = host.accel
+    if accel is None or not accel.cards:
+        return DASH
+    per_card = host.vram_per_card
+    if per_card is None:
+        return DASH
+    used, total = host.vram_used, host.vram_total
+    size = f"{per_card / 1024:.0f}G"
+    if used is None or not total:
+        return size
+    return f"{size} {used / total * 100:.0f}%"
 
 
 def _address_key(host: HostView) -> tuple:
@@ -526,6 +548,7 @@ class JmsTopApp(App):
             row_text(host.family_label, verdict),
             row_text(_map(host), verdict),
             row_text(cards, verdict),
+            row_text(_vram(host), verdict),
             row_text(verdict.upper(), verdict),
             row_text(_fmt_pct(load), verdict),
             row_text(_fmt_pct(host.node.mem_pct), verdict),

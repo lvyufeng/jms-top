@@ -8,17 +8,17 @@ matters before you start a job: **which of my machines can I actually take right
 ```
   jms-top    59/152 cards free  (39%)   5 free hosts   12 residual  │ 18/19 up │ next tick in 2.1s · full 4s ago
  Ascend 48   NVIDIA 32   Enflame 16   MetaX 16   MooreThreads 16   Kunlunxin 16   TsingMicro 8
- HOST                ADDRESS       KIND           CARD #             CARDS  STATE      LOAD   MEM   CPU   UP      USERS               AGE
- a800-171            10.0.0.12   NVIDIA         FFFFFFFF            8/8    FREE        2%    8%  39%   126d7h  root                0s
- gcu-s60             Enflame        FFFFFFFF            8/8    FREE        9%    3%   0%   120d8h  root                0s
- h800-65             NVIDIA         FFFFFFFF            8/8    FREE        1%   17%  12%   135d2h  root                0s
- mthreads-16         MooreThreads   FFFFFFFF            8/8    FREE        0%    2%   1%   115d20h root                0s
- ascend-910c-108     Ascend         BBBBFFBBFFFFFFFF   10/16   PARTIAL     5%   17%   2%   79d1h   pid 2510883,pid 2   0s
- p800-13             Kunlunxin      BFFBFFFF            6/8    PARTIAL     1%    5%   0%   72d3h   pid 2598031,pid 2   0s
- metax-mc550-121     NVIDIA         —                   —      UNKNOWN     5%    9%   0%   134d0h  root                0s
- h100-17             NVIDIA         BBBBBBBB            0/8    BUSY        6%   25%   4%   76d21h  pid 1062720,pid     0s
- tsingmicro-137      TsingMicro     ~~~~~~~~            0/8    RESIDUAL    1%    8%   0%   5d5h    root                0s
- dcu-bw1000-3        —              —                   —      DOWN        —     —    —    —       -                   —
+ HOST             ADDRESS    KIND          CARD #            CARDS  VRAM     STATE     LOAD  MEM  CPU  UP       USERS              AGE
+ a800-171         10.0.0.12  NVIDIA        FFFFFFFF          8/8    80G 0%   FREE      2%    8%   39%  126d7h   root               0s
+ gcu-s60          10.0.0.17  Enflame       FFFFFFFF          8/8    24G 1%   FREE      9%    3%   0%   120d8h   root               0s
+ h800-65          10.0.0.20  NVIDIA        FFFFFFFF          8/8    80G 12%  FREE      1%    17%  12%  135d2h   root               0s
+ mthreads-16      10.0.0.24  MooreThreads  FFFFFFFF          8/8    80G 0%   FREE      0%    2%   1%   115d20h  root               0s
+ ascend-910c-108  10.0.0.13  Ascend        BBBBFFBBFFFFFFFF  10/16  64G 41%  PARTIAL   5%    17%  2%   79d1h    pid 2510883,pid 2  0s
+ p800-13          10.0.0.33  Kunlunxin     BFFBFFFF          6/8    96G 9%   PARTIAL   1%    5%   0%   72d3h    pid 2598031,pid 2  0s
+ metax-mc550-121  10.0.0.57  MetaX         ————              —      64G 88%  UNKNOWN   5%    9%   0%   134d0h   root               0s
+ h100-17          10.0.0.61  NVIDIA        BBBBBBBB          0/8    80G 91%  BUSY      6%    25%  4%   76d21h   pid 1062720,pid 1  0s
+ tsingmicro-137   10.0.0.71  TsingMicro    ~~~~~~~~          0/8    64G 92%  RESIDUAL  1%    8%   0%   5d5h     root               0s
+ dcu-bw1000-3     10.0.0.82  —             —                 —      —        DOWN      —     —    —    —        -                  —
 ```
 
 `CARD #` is one character per accelerator, so "can I get four cards on one host?" is a
