@@ -14,6 +14,7 @@ import pytest
 
 from jms_top.config import Bastion
 from jms_top.cpu import CpuSample, load_per_cpu
+from jms_top.families import AccelResult, Card
 from jms_top.inventory import Host, Inventory
 from jms_top.model import (
     BUSY,
@@ -549,3 +550,37 @@ def test_with_no_cards_anywhere_the_error_is_the_answer():
     view = mon.view.by_name("a")
     assert view.verdict == UNKNOWN
     assert view.accel is not None and "NVIDIA driver" in (view.accel.error or "")
+
+
+def test_rows_do_not_jump_while_a_scan_is_in_progress():
+    """The table must only grow downward as answers land, never reshuffle.
+
+    Regression: an unscanned host read as UNKNOWN with 0 free cards, which lands in the
+    middle of the availability order. Two hosts swapping bands long after the scan
+    passed them looks like the cursor jumping around.
+    """
+    from jms_top.model import HostView
+
+    pending = HostView(name="not-yet")
+    assert pending.pending is True
+    answered_unknown = HostView(name="asked", reachable=True)
+    down = HostView(name="down", reachable=False)
+    idle_card = Card(index=0, util=0.0, mem_used=0.0, mem_total=81920.0)
+    free = HostView(
+        name="free",
+        reachable=True,
+        accel=AccelResult(family="nvidia", label="NVIDIA", cards=[idle_card]),
+    )
+
+    # Nothing that has answered sorts below an unanswered host.
+    assert pending.sort_key()[0] > down.sort_key()[0]
+    assert pending.sort_key()[0] > answered_unknown.sort_key()[0]
+    # ... and UNKNOWN sits above DOWN, so a daemon's rows do not drift either.
+    assert answered_unknown.sort_key()[0] < down.sort_key()[0]
+    assert free.sort_key()[0] < answered_unknown.sort_key()[0]
+
+    # While a round is in flight the order is frozen to the inventory's, so nothing
+    # moves at all — not even a host that has just reported FREE.
+    assert free.sort_key(stable=True)[0] == pending.sort_key(stable=True)[0]
+    stable = sorted([pending, free, down], key=lambda h: h.sort_key(stable=True))
+    assert [h.name for h in stable] == sorted(h.name for h in [pending, free, down])

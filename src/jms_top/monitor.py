@@ -297,6 +297,7 @@ class FleetMonitor:
             return
         self._scanned, self._scan_total = 0, len(hosts)
         self.view.scan_progress = (0, len(hosts))
+        self.view.scanning = True
         script = with_sentinel(
             build_script("fleet", limits=self.limits, nvidia_tile=self.nvidia_tile)
         )
@@ -338,6 +339,7 @@ class FleetMonitor:
                     self._touch()
         self._scan_total = 0  # round over: the footer stops showing progress
         self.view.scan_progress = None
+        self.view.scanning = False
         if changed:
             self._touch()
 

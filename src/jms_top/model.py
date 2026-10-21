@@ -204,12 +204,38 @@ class HostView:
         return UNKNOWN
 
     @property
-    def sort_key(self) -> tuple:
-        """Free hosts first, then partial; within a band, most free cards first."""
-        order = {FREE: 0, PARTIAL: 1, "cpu": 2, UNKNOWN: 3, BUSY: 4, RESIDUAL: 5, DOWN: 6}
+    def pending(self) -> bool:
+        """Has not answered yet — not "answered with something unknown".
+
+        The two look identical in the data (``reachable is None`` and no reading), but
+        they must not sort the same: a pending host is one the scan has not reached, and
+        it is about to become FREE, BUSY or DOWN. Sorting it with the UNKNOWN band would
+        make rows jump *out* of the middle of the table as the scan advanced.
+        """
+        return self.reachable is None and self.accel is None and self.updated_at is None
+
+    def sort_key(self, *, stable: bool = False) -> tuple:
+        """Free hosts first, then partial; within a band, most free cards first.
+
+        ``stable=True`` keeps the inventory's order instead, which is what the table
+        uses *while a round is in flight*: a host that reports FREE halfway through
+        would otherwise jump to the top, past whatever the cursor was pointing at.
+        The availability order returns when the round is over — that is when a re-sort
+        is wanted, because the whole point of the tool is to bring the free machines up.
+
+        Hosts that have not answered yet go last, below DOWN: they are not a verdict,
+        and putting them anywhere in the order means every one of them jumps rows when
+        its answer arrives.
+        """
+        if stable:
+            return (0, 0, 0, self.name)
+        if self.pending:
+            return (9, 0, 0, self.name)
+        order = {FREE: 0, PARTIAL: 1, "cpu": 2, BUSY: 3, RESIDUAL: 4, UNKNOWN: 5, DOWN: 6}
         return (
-            order.get(self.verdict, 9),
+            order.get(self.verdict, 8),
             -self.free_cards,
+            0,
             self.name,
         )
 
@@ -263,6 +289,10 @@ class FleetView:
     #: ``(done, total)`` while a full round is in flight, else ``None``. Shown in the
     #: footer so a slow round over a large inventory reads as progress, not as a hang.
     scan_progress: tuple[int, int] | None = None
+    #: True while a full round is in flight. The table keeps the order the round
+    #: started with for its duration: a host that reports FREE halfway through would
+    #: otherwise jump to the top, past whatever the cursor was pointing at.
+    scanning: bool = False
     #: How often a host with free capacity gets its card tables re-read.
     full_interval: float = 6.0
     #: One line per completed round, newest last — the activity log.

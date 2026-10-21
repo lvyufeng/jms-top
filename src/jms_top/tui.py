@@ -241,7 +241,11 @@ class JmsTopApp(App):
             if verdict_matches(h.verdict, self.filter) and self._matches(h)
         ]
         if self._sort_mode == "availability":
-            return sorted(hosts, key=lambda h: h.sort_key)
+            # Frozen while a round is in flight: arrivals must not reshuffle the table
+            # under the cursor. Between rounds the availability order applies, which is
+            # what brings the free machines to the top.
+            stable = self.monitor.view.scanning
+            return sorted(hosts, key=lambda h: h.sort_key(stable=stable))
         return sorted(hosts, key=lambda h: (h.family_label, h.name))
 
     def _matches(self, host: HostView) -> bool:
