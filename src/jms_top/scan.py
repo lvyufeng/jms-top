@@ -213,6 +213,13 @@ def parse_reply(view: HostView, text: str, *, stamp: float | None = None) -> Hos
     # answers for two families (a node with both an NPU and a GPU), the first in
     # probe order wins and the rest are ignored rather than merged into nonsense.
     stall_error = view.accel.error if (stalled and view.accel) else None
+    # The first family that actually *found cards* owns the host. A family whose tool
+    # merely exists does not: `nvidia-smi` is installed on hosts that have no NVIDIA
+    # driver, where it prints "NVIDIA-SMI has failed because it couldn't communicate
+    # with the NVIDIA driver" and no rows at all. Taking that as the answer would show
+    # a 沐曦 (MetaX) box as an NVIDIA host with no cards — which is exactly what used
+    # to happen on metax-mc550-121, because NVIDIA is probed first.
+    failed: dict[str, object] = {}
     for fam, parser in FAMILIES.items():
         keys = [fam.upper(), f"{fam.upper()}-WIDE"]  # e.g. ##METAX / ##METAX-WIDE
         present = [k for k in keys if k in sections]
@@ -224,12 +231,22 @@ def parse_reply(view: HostView, text: str, *, stamp: float | None = None) -> Hos
         if not body.strip() and not stalled:
             continue
         parsed = parser.parse(body)
+        if parsed.total:
+            view.accel = parsed
+            break
         if parsed.total == 0 and stall_error:
             # Whatever did parse is a partial table; "no rows" from a killed tool is
             # not the same answer as "no rows" from a tool that ran.
             parsed.error = stall_error
-        view.accel = parsed
-        break
+        # Kept, not chosen: if nothing else found cards this is the reason to show.
+        failed[fam] = parsed
+    else:
+        # No family reported a single card. Prefer a genuine tool error over a silent
+        # empty section, and say which tool it came from.
+        if failed:
+            view.accel = next(iter(failed.values()))  # type: ignore[assignment]
+        elif not view.accel:
+            view.accel = None
     view.updated_at = datetime.now(timezone.utc)
     view.raw = text
     return view

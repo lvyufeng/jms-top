@@ -481,3 +481,71 @@ def test_cheap_probe_carries_the_whole_node_view():
     cheap_body = cheap.splitlines()[2:10]
     full_body = full.splitlines()[2:10]
     assert cheap_body == full_body
+
+
+NVIDIA_DRIVER_ERROR = (
+    "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. "
+    "Make sure that the latest NVIDIA driver is installed and running."
+)
+
+
+def _metax_wide_body(tmp_path=None) -> str:
+    """A minimal `##METAX-WIDE` payload: one card, memory held, one process."""
+    return "\n".join(
+        [
+            "mx-smi  version: 2.3.1",
+            "Attached GPUs                                     : 1",
+            "GPU#0  MXC550  0000:2b:00.0",
+            "    Memory",
+            "        vis_vram total                            : 67108864 KB",
+            "        vis_vram used                             : 47663812 KB",
+            "GPU#0  MXC550  0000:2b:00.0",
+            "    Utilization",
+            "        GPU                                       : 12 %",
+            "| Process:                                                                        |",
+            "|  0                  2744908         python3.12                   45634          |",
+        ]
+    )
+
+
+def test_a_tool_that_found_no_cards_does_not_own_the_host():
+    """`nvidia-smi` exists on 沐曦 boxes with no NVIDIA driver and prints only an error.
+
+    Regression: that empty section used to win because NVIDIA is probed first, so a
+    MetaX host showed up as an NVIDIA host with zero cards — reported UNKNOWN instead
+    of showing its eight MXC550s.
+    """
+    reply_text = (
+        f"{SENTINEL}\n##SYS\n1.0 1.0 1.0 1/1 1\n8\n8\n100 50 0\n100\n10\n1000 500\nh\n"
+        f"##NVIDIA\n{NVIDIA_DRIVER_ERROR}\n\n"
+        f"##METAX-WIDE\n{_metax_wide_body()}\n"
+    )
+    mon = make_monitor({"a": reply_text})
+
+    async def run():
+        await mon.poll()
+
+    asyncio.run(run())
+    view = mon.view.by_name("a")
+    assert view.platform == "nvidia", "the fixture host is labelled NVIDIA on purpose"
+    assert view.accel is not None
+    assert view.accel.family == "metax"
+    assert view.accel.total == 1
+    assert view.verdict != UNKNOWN
+
+
+def test_with_no_cards_anywhere_the_error_is_the_answer():
+    """Nothing found cards: report the tool's error, not a silent "no accelerators"."""
+    reply_text = (
+        f"{SENTINEL}\n##SYS\n1.0 1.0 1.0 1/1 1\n8\n8\n100 50 0\n100\n10\n1000 500\nh\n"
+        f"##NVIDIA\n{NVIDIA_DRIVER_ERROR}\n"
+    )
+    mon = make_monitor({"a": reply_text})
+
+    async def run():
+        await mon.poll()
+
+    asyncio.run(run())
+    view = mon.view.by_name("a")
+    assert view.verdict == UNKNOWN
+    assert view.accel is not None and "NVIDIA driver" in (view.accel.error or "")
