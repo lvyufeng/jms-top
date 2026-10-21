@@ -288,6 +288,10 @@ class JmsTopApp(App):
         self._rebuilding = False
         #: Pending coalesced frame (Textual timer handle), or None.
         self._frame_handle = None
+        #: Name of the row a programmatic `move_cursor` is heading for. While it is
+        #: set, `RowHighlighted` events are ignored — they arrive asynchronously, one
+        #: per row the cursor passes, so a flag cleared after the call is too early.
+        self._pending_cursor: str | None = None
 
     # --- composition -----------------------------------------------------------
 
@@ -382,6 +386,20 @@ class JmsTopApp(App):
             # memory and one at 100% get interleaved across their band. For "show me
             # everything that is DOWN" the bands must be contiguous.
             return sorted(hosts, key=lambda h: (h.sort_key()[0], h.name))
+        if frozen and self._rendered_rows:
+            # Freeze means *freeze*: keep the exact order the table already shows and
+            # append rows that have appeared since. Re-deriving a "stable" order from
+            # names still re-sorts, and during a scan the data changes many times a
+            # second — every re-sort moved the cursor, which fired a highlight event,
+            # which rewrote the selection: 1500 selection changes in a few seconds, and
+            # a side panel showing a different host than the highlighted row.
+            rank = {n: i for i, n in enumerate(self._rendered_rows)}
+            known = [h for h in hosts if h.name in rank]
+            known.sort(key=lambda h: rank[h.name])
+            fresh = [h for h in hosts if h.name not in rank]
+            if fresh:
+                fresh.sort(key=lambda h: self._availability_key(h, frozen=False))
+            return known + fresh
         return sorted(hosts, key=lambda h: self._availability_key(h, frozen=frozen))
 
     def _availability_key(self, host: HostView, *, frozen: bool) -> tuple:
@@ -506,14 +524,19 @@ class JmsTopApp(App):
         hosts = self.visible_hosts()
         names = [h.name for h in hosts]
         cursor_name = self._selected
-        if len(names) != len(self._rendered_rows) or set(names) != set(self._rendered_rows):
-            # Only the *set* of rows forces a rebuild. A reorder is handled by writing
-            # cells into their new positions below: `clear()` + re-add leaves the table
-            # briefly inconsistent (stale row/column metadata between the two calls),
-            # and a click landing in that window is hit-tested against the old layout —
-            # clicking STATE during a scan hit MEM instead. Rebuilding on every reorder
-            # made that window appear constantly, because a scan reorders rows as
-            # results arrive.
+        if names != self._rendered_rows:
+            # A reorder rebuilds. Writing cells into their new positions is cheaper, but
+            # `update_cell_at` only replaces *content* — the rows keep the keys they
+            # were added with, so `ordered_rows` stays in the old order while the screen
+            # shows the new one. Row indices then mean two different things, and
+            # `move_cursor(row=i)` lands on the wrong host: the cursor and the side
+            # panel disagreed for exactly this reason.
+            #
+            # The earlier objection to rebuilding was that `clear()` + re-add leaves a
+            # window where a click is hit-tested against the old layout. That is now
+            # covered: column widths are fixed, and the reorder rate dropped to "only
+            # when a band actually changes" when availability stopped re-sorting on
+            # every free-card count.
             table.clear()
             for host in hosts:
                 table.add_row(*self._cells(host), key=host.name)
@@ -521,6 +544,7 @@ class JmsTopApp(App):
             self._row_rank = {n: i for i, n in enumerate(names)}
             self._selected = cursor_name if cursor_name in names else (names[0] if names else None)
             if self._selected is not None:
+                self._pending_cursor = self._selected
                 table.move_cursor(row=names.index(self._selected))
         else:
             # `update_width=False` is the whole point: each cell update otherwise
@@ -534,8 +558,8 @@ class JmsTopApp(App):
                     # frame cost 560 ms, *and* it changes the layout under the pointer
                     # mid-scan. Widths are set once when the columns are added.
                     table.update_cell_at((i, j), cell, update_width=False)
-            self._rendered_rows = names
-            self._row_rank = {n: i for i, n in enumerate(names)}
+            # Same rows, same order: only the cells need rewriting. The table's keys
+            # already match `names`, so no cursor work is needed.
 
     def _cells(self, host: HostView) -> list[Text]:
         verdict = host.verdict
@@ -605,11 +629,52 @@ class JmsTopApp(App):
 
     # --- messages --------------------------------------------------------------
 
+    @property
+    def _live(self) -> bool:
+        """Whether the widget tree is present and paintable.
+
+        `is_mounted` is not enough: `recompose()` tears the children down while the app
+        itself stays mounted, and a highlight emitted during teardown would then paint
+        against widgets that no longer exist (`NoMatches: #titlebar`). Asking for one
+        of our own widgets is the direct test.
+        """
+        try:
+            self.query_one("#titlebar", Static)
+            return True
+        except Exception:  # noqa: BLE001 - any failure means "cannot paint"
+            return False
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Track the cursor as the user moves it.
+
+        Guarded against our own `move_cursor` calls: keeping the cursor on the selected
+        host after a reorder emits this event too, and if that event were taken at face
+        value it would *overwrite* the selection with whatever row we had just moved
+        past. That feedback loop made the highlight and the side panel disagree on
+        almost every frame of a scan.
+        """
+        if self._rebuilding or not self._live:
+            return
         key = event.row_key
-        if key is not None and key.value is not None:
-            self._selected = str(key.value)
+        if key is None or key.value is None:
+            return
+        name = str(key.value)
+        if self._pending_cursor is not None:
+            # A programmatic move is settling. Ignore highlights until the cursor
+            # actually arrives at the row we asked for, then clear the expectation.
+            if name == self._pending_cursor:
+                self._pending_cursor = None
+            return
+        if name != self._selected:
+            self._selected = name
             self._render()
+        # `name == self._selected` means this highlight was caused by our own
+        # `move_cursor` keeping the cursor on the selection — nothing to do, and
+        # re-rendering here would loop. A *user* moving the cursor produces a name
+        # that differs from `_selected`, which is the case above. That is why this
+        # compares names instead of using a "we are moving the cursor" flag: cursor
+        # moves deliver `RowHighlighted` asynchronously, so a flag set and cleared
+        # around `move_cursor()` is already false by the time the event arrives.
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.needle = event.value.strip()

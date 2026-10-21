@@ -494,3 +494,73 @@ def test_a_band_change_still_promotes_a_row():
     freeish = HostView(name="x", reachable=True)
     freeish.accel = None
     assert FREE != BUSY
+
+
+def test_highlighted_row_and_side_panel_never_disagree():
+    """The row under the cursor and the panel beside it must be the same host.
+
+    Reported as "selecting bw1100-2 shows a different machine on the right". The
+    table writes cells into their new positions on every reorder, so a cursor left
+    where it was started pointing at whatever host had been written there — while the
+    side panel, keyed by name, kept showing the original. Two separate causes:
+
+    * the cursor was never re-aligned after a reorder, and
+    * the `RowHighlighted` event that re-alignment emits arrives asynchronously and was
+      being read as "the user moved", overwriting the selection.
+    """
+    from textual.widgets import DataTable
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(160, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            for _ in range(4):
+                await pilot.press("down")
+            await pilot.pause()
+            picked = app._selected
+            app._render_table()
+            await pilot.pause()
+            chosen = app.selected_view()
+            table = app.query_one("#table", DataTable)
+            row_name = list(table.ordered_rows)[table.cursor_row].key.value
+            return picked, app._selected, chosen.name if chosen else None, row_name
+
+    picked, selected, shown, row_name = run(go())
+    assert selected == picked, "the selection moved on its own"
+    assert shown == selected, "the side panel disagrees with the selection"
+    assert row_name == selected, "the highlighted row is not the selected host"
+
+
+def test_selection_survives_a_reorder():
+    """Rearranging rows moves the cursor to follow the host, not the row index."""
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(160, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            for _ in range(4):
+                await pilot.press("down")
+            await pilot.pause()
+            picked = app._selected
+            # Swap the selected row with its neighbour: the content of every row moves.
+            hosts = app.visible_hosts()
+            idx = [h.name for h in hosts].index(picked)
+            hosts[idx], hosts[idx + 1] = hosts[idx + 1], hosts[idx]
+            app.visible_hosts = lambda: hosts
+            app._render_table()
+            await pilot.pause()
+            from textual.widgets import DataTable
+
+            table = app.query_one("#table", DataTable)
+            row_name = list(table.ordered_rows)[table.cursor_row].key.value
+            return picked, app._selected, row_name, app.selected_view().name
+
+    picked, selected, row_name, shown = run(go())
+    assert selected == picked, "the selection followed the row instead of the host"
+    assert row_name == picked, "the cursor did not follow the selected host"
+    assert shown == picked
