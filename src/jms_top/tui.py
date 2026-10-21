@@ -98,7 +98,25 @@ FRAME_INTERVAL = 0.25
 #: screen it is about to change.
 WATCH_HZ = 1.0
 
+#: Orderings the table can use, cycled with `u`. Availability first, because that is
+#: the question the tool exists to answer; the others are for *finding* a machine.
+SORT_MODES = ("availability", "address", "kind")
+
 DASH = "—"
+
+
+def _address_key(host: HostView) -> tuple:
+    """Sort by address, numerically within each /24.
+
+    A plain text sort puts `10.0.0.10` before `10.0.0.9`, which reads as random in a
+    list of subnets. Sorting the octets as integers groups neighbours the way the rack
+    is laid out. Unresolvable addresses sort last rather than first.
+    """
+    addr = (host.address or "").split(":")[0]  # drop any port
+    parts = addr.split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        return (0, tuple(int(p) for p in parts), host.name)
+    return (1, (), host.name)
 
 
 def verdict_matches(verdict: str, wanted: str) -> bool:
@@ -168,7 +186,7 @@ class JmsTopApp(App):
         Binding("space", "toggle_pause", "pause"),
         Binding("i", "slower", "interval+"),
         Binding("o", "faster", "interval-"),
-        Binding("u", "sort_kind", "sort"),
+        Binding("u", "cycle_sort", "sort"),
         Binding("ctrl+r", "reload", "reload", show=False),
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
@@ -266,13 +284,16 @@ class JmsTopApp(App):
             for h in self.monitor.view.hosts
             if verdict_matches(h.verdict, self.filter) and self._matches(h)
         ]
-        if self._sort_mode == "availability":
-            # Frozen while a round is in flight: arrivals must not reshuffle the table
-            # under the cursor. Between rounds the availability order applies, which is
-            # what brings the free machines to the top.
-            stable = self.monitor.view.scanning
-            return sorted(hosts, key=lambda h: h.sort_key(stable=stable))
-        return sorted(hosts, key=lambda h: (h.family_label, h.name))
+        # Frozen while a round is in flight: arrivals must not reshuffle the table
+        # under the cursor. Between rounds every mode sorts normally, which is what
+        # brings the free machines to the top once the scan has finished.
+        stable = self.monitor.view.scanning
+        if self._sort_mode == "address":
+            return sorted(hosts, key=lambda h: _address_key(h))
+        if self._sort_mode == "kind":
+            # Within a model, free first: grouping should not bury the useful rows.
+            return sorted(hosts, key=lambda h: (h.family_label, h.sort_key(stable=stable)))
+        return sorted(hosts, key=lambda h: h.sort_key(stable=stable))
 
     def _matches(self, host: HostView) -> bool:
         if not self.needle:
@@ -450,6 +471,10 @@ class JmsTopApp(App):
             "q quit",
         ]
         text = Text("  ".join(keys), style="dim")
+        # The current ordering is shown, not just the key that changes it: after a
+        # `u` the table looks shuffled for no stated reason otherwise.
+        if self._sort_mode != SORT_MODES[0]:
+            text.append(f"  [{self._sort_mode}]", style="bold cyan")
         if self._watcher is not None:
             text.append("  ^r reload", style="dim")
         if self._restart_pending:
@@ -621,10 +646,22 @@ class JmsTopApp(App):
         self.monitor.view.interval = self.monitor.base_interval
         self._paint_now()
 
-    def action_sort_kind(self) -> None:
-        self._sort_mode = "kind" if self._sort_mode == "availability" else "availability"
+    def action_cycle_sort(self) -> None:
+        """Cycle the ordering: availability -> address -> kind -> availability.
+
+        Availability stays the default because it is the question the tool exists to
+        answer. The other two are for finding a machine rather than a free slot:
+        `address` sorts numerically inside each subnet (so `.9` precedes `.10`, which a
+        text sort gets wrong), `kind` groups by accelerator model.
+        """
+        self._sort_mode = SORT_MODES[(SORT_MODES.index(self._sort_mode) + 1) % len(SORT_MODES)]
         self._rendered_rows = []
         self._paint_now()
+        self.log(f"sort: {self._sort_mode}")
+
+    def action_sort_kind(self) -> None:
+        """Kept for the `u` binding's history; cycles like :meth:`action_cycle_sort`."""
+        self.action_cycle_sort()
 
     def action_cursor_down(self) -> None:
         self.query_one("#table", DataTable).action_cursor_down()

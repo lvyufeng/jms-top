@@ -196,3 +196,70 @@ async def _input_paints_immediately():
         assert app._frame_handle is not None
         app._paint_now()  # a keypress arrives
         assert app._frame_handle is None, "the queued frame outlived the keypress"
+
+
+def test_sort_cycles_through_availability_address_and_kind():
+    """`u` cycles three orderings; availability stays first because it is the point."""
+    from jms_top.tui import SORT_MODES
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            seen = []
+            for _ in range(4):
+                seen.append(app._sort_mode)
+                app.action_cycle_sort()
+                await pilot.pause()
+            return seen
+
+    assert SORT_MODES[0] == "availability"
+    assert run(go()) == ["availability", "address", "kind", "availability"]
+
+
+def test_address_sort_is_numeric_not_lexicographic():
+    """`10.0.0.9` before `10.0.0.10` — a text sort gets this backwards."""
+    from jms_top.model import HostView
+    from jms_top.tui import _address_key
+
+    rows = [HostView(name="n", address=a) for a in ("10.0.0.10", "10.0.0.9", "10.0.1.1")]
+    rows.append(HostView(name="undialled", address=None))
+    ordered = [h.address for h in sorted(rows, key=_address_key)]
+    assert ordered == ["10.0.0.9", "10.0.0.10", "10.0.1.1", None]
+
+
+def test_kind_sort_groups_by_accelerator_then_puts_free_first():
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            app._sort_mode = "kind"
+            rows = app.visible_hosts()
+            labels = [h.family_label for h in rows]
+            free_first_ok = all(
+                group == sorted(group, key=lambda h: h.verdict != "free")
+                for group in _grouped(rows)
+            )
+            return labels, free_first_ok
+
+    labels, free_first_ok = run(go())
+    assert labels == sorted(labels), "families are not contiguous"
+    assert free_first_ok, "a free host sat below a busy one inside its family"
+
+
+def _grouped(rows):  # noqa: ANN001, ANN202
+    out, cur = [], []
+    for row in rows:
+        if cur and row.family_label != cur[0].family_label:
+            out.append(cur)
+            cur = []
+        cur.append(row)
+    if cur:
+        out.append(cur)
+    return out
