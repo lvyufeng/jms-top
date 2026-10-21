@@ -146,3 +146,53 @@ def test_interval_keys_change_the_poll_rate():
             assert monitor.base_interval == pytest.approx(4.0)
 
     run(go())
+
+
+def test_painting_is_coalesced_not_per_change():
+    run(_painting_is_coalesced())
+
+
+async def _painting_is_coalesced():
+    """A streaming scan must not paint once per reply.
+
+    77 replies in under two minutes used to mean 77 full table rebuilds, which is what
+    made the UI feel stuck while the CPU number looked acceptable.
+    """
+    from jms_top.demo import demo_monitor
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+    app = JmsTopApp(monitor, boot=False, watch=False)
+    async with app.run_test(size=(140, 34)) as pilot:
+        await monitor.poll()
+        await pilot.pause()
+        app._draw_frame()
+        # A burst of changes inside one frame window must arm exactly one frame.
+        for _ in range(20):
+            monitor._touch()
+        assert app._frame_handle is not None
+        first = app._frame_handle
+        for _ in range(20):
+            monitor._touch()
+        assert app._frame_handle is first, "a second frame was queued inside the window"
+        await asyncio.sleep(0.4)
+        await pilot.pause()
+        assert app._frame_handle is None
+
+
+def test_input_paints_immediately_instead_of_waiting_for_a_frame():
+    run(_input_paints_immediately())
+
+
+async def _input_paints_immediately():
+    """A keypress cannot wait behind a scan: that is what "laggy" feels like."""
+    from jms_top.demo import demo_monitor
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+    app = JmsTopApp(monitor, boot=False, watch=False)
+    async with app.run_test(size=(140, 34)) as pilot:
+        await monitor.poll()
+        await pilot.pause()
+        monitor._touch()  # arms a frame
+        assert app._frame_handle is not None
+        app._paint_now()  # a keypress arrives
+        assert app._frame_handle is None, "the queued frame outlived the keypress"

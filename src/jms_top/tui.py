@@ -77,8 +77,22 @@ COLUMNS = (
     "AGE",
 )
 
-#: How often the screen is repainted *if* something changed.
+#: The repaint timer no longer polls at a fixed rate. It used to wake 10 times a second
+#: and return early unless the data had moved — which still costs the event loop a
+#: wakeup per tick, and measured 44-86% of a core doing nothing at all (with all app
+#: timers paused the same app idles at 0.1%). Painting is now driven by the data: the
+#: monitor bumps a generation counter when a reply lands, and one task paints per
+#: change. The clock in the header still needs to move, but once a second is enough
+#: for a countdown, so that is the only thing left on a timer.
+#: Retained for the docs/tests that refer to "the repaint path"; painting itself is
+#: driven by data now (see :meth:`JmsTopApp._paint`), not by this rate.
 REPAINT_HZ = 10
+
+#: Frame rate while data is streaming. 4 fps is enough for numbers that change at
+#: seconds' pace, and it is not a smoothness knob: every frame is a full re-read of the
+#: 77-row view model (~3 ms), so 10 fps would burn 30% of a core to redraw glyphs
+#: nobody can read that fast.
+FRAME_INTERVAL = 0.25
 #: How often the source watcher stats the package (one ``stat`` per file). Saves are
 #: not latency-critical, and a second of lag is unnoticeable while you are reading the
 #: screen it is about to change.
@@ -185,6 +199,8 @@ class JmsTopApp(App):
         # True while the widget tree is being rebuilt. The repaint timer keeps firing
         # during that window and would otherwise query widgets that have been removed.
         self._rebuilding = False
+        #: Pending coalesced frame (Textual timer handle), or None.
+        self._frame_handle = None
 
     # --- composition -----------------------------------------------------------
 
@@ -211,7 +227,14 @@ class JmsTopApp(App):
         self.query_one("#log", RichLog).display = False
         self._render()
         self._shown_at = 0.0
-        self.set_interval(1.0 / REPAINT_HZ, self._repaint)
+        # Paint on data, not on a clock: the monitor calls this whenever a reply lands.
+        # The 1 Hz timer below is only for the "next tick in 2.1s" countdown.
+        self.monitor.on_change = self._paint
+        # No repaint timer at all. A timer callback in Textual schedules a render even
+        # when the handler writes nothing, so a 1 Hz clock cost 22% of a core here and
+        # the old 10 Hz one cost most of a core. Everything on screen changes because a
+        # reply arrived (which calls `_paint`), a key was pressed, or the selection
+        # moved — none of which need a clock.
         if self._watch:
             self._watcher = SourceWatcher()
             # One stat per source per tick: cheap enough to leave on, and it means an
@@ -228,6 +251,9 @@ class JmsTopApp(App):
         self.monitor.start()
 
     async def on_unmount(self) -> None:
+        # The monitor may outlive the app (tests, screenshots); a stale callback into a
+        # torn-down widget tree is the one thing worse than a slow repaint.
+        self.monitor.on_change = None
         # An async handler: `run_worker` would create a worker that the app is already
         # tearing down, and a bare call would leave the coroutine un-awaited.
         await self.monitor.close()
@@ -270,16 +296,51 @@ class JmsTopApp(App):
         return None if self._selected is None else self.monitor.view.by_name(self._selected)
 
     def _repaint(self) -> None:
-        """Repaint only when the data actually moved, or once a second for the clocks."""
+        """Paint if the data moved. Kept for callers that want a no-op-when-idle paint."""
         if self._rebuilding:
             return
-        now = time.monotonic()
-        if (
-            self.monitor.generation != self._rendered_generation
-            or now - getattr(self, "_shown_at", 0.0) >= 1.0
-        ):
-            self._shown_at = now
-            self._render()
+        if self.monitor.generation != self._rendered_generation:
+            self._paint()
+
+    def _paint(self) -> None:
+        """Schedule a frame; at most one is drawn per :data:`FRAME_INTERVAL`.
+
+        Painting immediately on every change is what made the interface feel stuck: a
+        scan over 77 hosts fires ~77 changes in under two minutes, and each one rebuilt
+        the whole table. Painting on a timer instead was worse still — Textual schedules
+        a render for every timer callback, so a 1 Hz clock sat at 22% and a 10 Hz one at
+        most of a core whether or not anything had changed.
+
+        Trailing-edge coalescing gets both: a change arms one delayed frame, later
+        changes in the same window join it, and the frame is drawn once. The screen
+        updates at `FRAME_INTERVAL` while data streams in (smooth, bounded cost) and
+        immediately when nothing is streaming (a keypress paints on the next frame).
+        """
+        if self._rebuilding:
+            return
+        if self._frame_handle is not None:
+            return  # a frame is already on its way; this change joins it
+        self._frame_handle = self.set_timer(FRAME_INTERVAL, self._draw_frame)
+
+    def _paint_now(self) -> None:
+        """Paint this instant, cancelling a queued frame — for input that must feel live.
+
+        Keystrokes, cursor moves and mode changes are user-driven and rare; making them
+        wait up to a frame for a scan to finish is what "sluggish" means. A streaming
+        reply can afford to coalesce, a keypress cannot.
+        """
+        if self._frame_handle is not None:
+            self._frame_handle.stop()
+            self._frame_handle = None
+        self._draw_frame()
+
+    def _draw_frame(self) -> None:
+        self._frame_handle = None
+        if self._rebuilding:
+            return
+        self._painted_at = time.monotonic()
+        self._shown_at = self._painted_at
+        self._render()
 
     def _render(self) -> None:
         if self._rebuilding:
@@ -330,9 +391,14 @@ class JmsTopApp(App):
             if self._selected is not None:
                 table.move_cursor(row=names.index(self._selected))
         else:
+            # `update_width=False` is the whole point: each cell update otherwise
+            # recomputes the column widths, so 77 rows x 13 columns meant ~1000 width
+            # recalculations per frame and a 560 ms repaint — the table felt frozen
+            # while a scan streamed results in. The widths only need refreshing once,
+            # after every cell is written.
             for i, host in enumerate(hosts):
                 for j, cell in enumerate(self._cells(host)):
-                    table.update_cell_at((i, j), cell, update_width=True)
+                    table.update_cell_at((i, j), cell)
 
     def _cells(self, host: HostView) -> list[Text]:
         verdict = host.verdict
@@ -459,8 +525,9 @@ class JmsTopApp(App):
         work: ``compose`` uses ``with`` blocks that need the stack ``recompose`` sets
         up, and calling it outside that raises ``IndexError``.)
 
-        The repaint timer is paused for the swap — it would otherwise query widgets that
-        have just been removed.
+        Painting is suppressed for the swap (a paint would query widgets that have just
+        been removed), and one is forced at the end: with no repaint timer there is
+        nothing else to schedule it.
         """
         self._rendered_rows = []
         self._rendered_generation = -1
@@ -473,6 +540,8 @@ class JmsTopApp(App):
             # the widgets that did mount are the ones just composed.
             self._rebuilding = False
             self._rendered_generation = -1
+            # Nobody else will paint this frame: the swap happened outside any timer.
+            self._render()
 
     async def _after_rebuild(self) -> None:
         """Re-apply mount-time wiring on the fresh widgets, then paint.
@@ -506,7 +575,7 @@ class JmsTopApp(App):
     def action_cycle_filter(self) -> None:
         self.filter = FILTERS[(FILTERS.index(self.filter) + 1) % len(FILTERS)]
         self._rendered_rows = []
-        self._render()
+        self._paint_now()
 
     def action_search(self) -> None:
         board = self.query_one("#command", Input)
@@ -517,7 +586,7 @@ class JmsTopApp(App):
     def action_close_overlay(self) -> None:
         if self._detail_mode:
             self._detail_mode = False
-            self._render()
+            self._paint_now()
             return
         if self.query_one("#command", Input).display:
             self._hide_command()
@@ -529,7 +598,7 @@ class JmsTopApp(App):
 
     def action_inspect(self) -> None:
         self._detail_mode = True
-        self._render()
+        self._paint_now()
 
     def action_refresh(self) -> None:
         if hasattr(self.monitor, "refresh_now"):
@@ -540,22 +609,22 @@ class JmsTopApp(App):
             self.monitor.resume()
         else:
             self.monitor.pause()
-        self._render()
+        self._paint_now()
 
     def action_slower(self) -> None:
         self.monitor.base_interval = min(60.0, self.monitor.base_interval * 2)
         self.monitor.view.interval = self.monitor.base_interval
-        self._render()
+        self._paint_now()
 
     def action_faster(self) -> None:
         self.monitor.base_interval = max(1.0, self.monitor.base_interval / 2)
         self.monitor.view.interval = self.monitor.base_interval
-        self._render()
+        self._paint_now()
 
     def action_sort_kind(self) -> None:
         self._sort_mode = "kind" if self._sort_mode == "availability" else "availability"
         self._rendered_rows = []
-        self._render()
+        self._paint_now()
 
     def action_cursor_down(self) -> None:
         self.query_one("#table", DataTable).action_cursor_down()

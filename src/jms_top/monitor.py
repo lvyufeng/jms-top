@@ -79,7 +79,7 @@ class FleetMonitor:
         *,
         targets: list[str] | None = None,
         interval: float = 3.0,
-        full_interval: float | None = None,
+        full_interval: float | None = 60.0,
         bastion: Bastion | None = None,
         inventory: Inventory | None = None,
         runner: SSHRunner | None = None,
@@ -103,7 +103,12 @@ class FleetMonitor:
         self.nvidia_tile = nvidia_tile
         self.timeout = timeout
         self.base_interval = max(0.5, float(interval))
-        self.full_interval = max(self.base_interval, float(full_interval or self.base_interval * 2))
+        # 60 s by default: a full round reads every card table on every host, which over
+        # 77 machines is the one part of the loop that is genuinely expensive. Three
+        # seconds is still enough for CPU/load, which is what "is it busy" turns on.
+        self.full_interval = max(
+            self.base_interval, float(full_interval if full_interval is not None else 60.0)
+        )
         self._log_sink = log
 
         selectors = targets or ["all"]
@@ -134,6 +139,10 @@ class FleetMonitor:
         #: Bumped whenever anything the UI shows changes; the UI diffs it instead of
         #: re-rendering on a timer.
         self.generation = 0
+        #: Optional ``() -> None`` called after :meth:`_touch`. The TUI uses it to paint
+        #: the moment a reply lands, so the screen is event-driven rather than polled —
+        #: a 10 Hz poll of a counter cost most of a core on its own.
+        self.on_change: Callable[[], None] | None = None
         self._round_no = 0
         self._running = False
         self._current: asyncio.Task | None = None
@@ -165,6 +174,8 @@ class FleetMonitor:
 
     def _touch(self) -> None:
         self.generation += 1
+        if self.on_change is not None:
+            self.on_change()
 
     # --- one round -------------------------------------------------------------
 
