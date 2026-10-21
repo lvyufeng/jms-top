@@ -226,6 +226,7 @@ class JmsTopApp(App):
         Binding("i", "slower", "interval+"),
         Binding("o", "faster", "interval-"),
         Binding("u", "cycle_sort", "sort", show=False),
+        Binding("l", "toggle_log", "log", show=False),
         Binding("ctrl+r", "reload", "reload", show=False),
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
@@ -251,6 +252,13 @@ class JmsTopApp(App):
         self._selected: str | None = None
         self._detail_mode = False
         self._sort_mode = "availability"
+        #: name -> current row position. Availability keeps a row in the slot it already
+        #: holds instead of re-sorting on every free-card change, so the table does not
+        #: jump each time a host's card count moves.
+        self._row_rank: dict[str, int] = {}
+        #: name -> current row position, so availability can keep rows in place instead
+        #: of re-sorting on every free-card change.
+        self._row_rank: dict[str, int] = {}
         self._watcher: SourceWatcher | None = None
         self._restart_pending = False
         # True while the widget tree is being rebuilt. The repaint timer keeps firing
@@ -340,7 +348,7 @@ class JmsTopApp(App):
         #   * kind and state: the *user* just asked for this order. Freezing them was
         #     a bug — it collapsed every mode to inventory order, so clicking STATE
         #     mid-scan changed the label in the footer and nothing else.
-        stable = self.monitor.view.scanning and self._sort_mode == "availability"
+        frozen = self.monitor.view.scanning or self._sort_mode == "availability"
         if self._sort_mode == "address":
             return sorted(hosts, key=lambda h: _address_key(h))
         if self._sort_mode == "kind":
@@ -352,7 +360,23 @@ class JmsTopApp(App):
             # memory and one at 100% get interleaved across their band. For "show me
             # everything that is DOWN" the bands must be contiguous.
             return sorted(hosts, key=lambda h: (h.sort_key()[0], h.name))
-        return sorted(hosts, key=lambda h: h.sort_key(stable=stable))
+        return sorted(hosts, key=lambda h: self._availability_key(h, frozen=frozen))
+
+    def _availability_key(self, host: HostView, *, frozen: bool) -> tuple:
+        """Band first; inside a band, keep the row where it already is.
+
+        The band comes from the verdict, so a host that frees up moves up — that is
+        the whole point of the tool. The *tie-break* is the position the row already
+        holds, not its free-card count: sorting on cards means the table re-shuffles
+        every time a host's count changes, which happens on every full round (60 s by
+        default) as other people start and stop work. That periodic jump is what made
+        the default view look like it kept switching to a state-grouped ordering.
+
+        A row that is frozen (mid-scan, or just promoted) keeps its slot by name.
+        """
+        if frozen and host.name in self._row_rank:
+            return (host.sort_key()[0], 0, self._row_rank[host.name], host.name)
+        return (host.sort_key()[0], 1, 0, host.name)
 
     def _matches(self, host: HostView) -> bool:
         if not self.needle:
@@ -472,6 +496,7 @@ class JmsTopApp(App):
             for host in hosts:
                 table.add_row(*self._cells(host), key=host.name)
             self._rendered_rows = names
+            self._row_rank = {n: i for i, n in enumerate(names)}
             self._selected = cursor_name if cursor_name in names else (names[0] if names else None)
             if self._selected is not None:
                 table.move_cursor(row=names.index(self._selected))
@@ -488,6 +513,7 @@ class JmsTopApp(App):
                     # mid-scan. Widths are set once when the columns are added.
                     table.update_cell_at((i, j), cell, update_width=False)
             self._rendered_rows = names
+            self._row_rank = {n: i for i, n in enumerate(names)}
 
     def _cells(self, host: HostView) -> list[Text]:
         verdict = host.verdict
@@ -752,8 +778,20 @@ class JmsTopApp(App):
             self._sort_mode = "availability" if wanted == self._sort_mode else wanted
         self._rendered_rows = []
         self._paint_now()
-        if self._sort_mode != "availability":
-            self.log(f"sorted by {label.lower()}")
+        # Logged whether or not the mode changed: a click that lands on a header and
+        # does nothing looks identical to no click at all, and the difference is
+        # exactly what is needed to diagnose "it reordered itself".
+        self.log(f"header clicked: {label or '?'} -> sort={self._sort_mode}")
+
+    def action_toggle_log(self) -> None:
+        """Show the event log — every sort change, reload and error lands here.
+
+        It was mounted and hidden with no way to reveal it, so `sorted by state` (and
+        any reload failure) went somewhere the user could not look.
+        """
+        log = self.query_one("#log", RichLog)
+        log.display = not log.display
+        self._paint_now()
 
     def action_cycle_sort(self) -> None:
         """Cycle the ordering: availability -> address -> kind -> availability.

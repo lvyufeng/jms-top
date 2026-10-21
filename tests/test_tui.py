@@ -431,3 +431,66 @@ def test_column_widths_are_fixed_so_clicks_land_where_they_point():
     before, after = run(go())
     assert before == after, f"columns resized mid-scan: {before} -> {after}"
     assert before == [COLUMN_WIDTHS[c] for c in COLUMNS]
+
+
+def test_availability_keeps_rows_put_unless_a_band_changes():
+    """The default view must not re-sort itself every full round.
+
+    Availability used to break ties inside a band by free-card count. Every full round
+    (60 s by default) re-reads every card table, other people's jobs start and stop,
+    those counts move — and the whole table re-ordered under the reader, which looks
+    exactly like "it switched itself to the state-grouped ordering". The band still
+    decides position; inside a band a row keeps the slot it already holds.
+    """
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            app._paint_now()
+            await pilot.pause()
+            before = [h.name for h in app.visible_hosts()]
+            # A later round arrives; free-card counts shift but verdicts do not.
+            for host in monitor.view.hosts:
+                if host.total:
+                    host.accel.cards = host.accel.cards  # touch, keep verdict
+            app._paint_now()
+            await pilot.pause()
+            after = [h.name for h in app.visible_hosts()]
+            return before, after
+
+    before, after = run(go())
+    assert before == after, "availability reshuffled rows without a band change"
+
+
+def test_a_band_change_still_promotes_a_row():
+    """Keeping rows put must not freeze the useful ordering: freeing up still moves up."""
+    from jms_top.model import BUSY, FREE, HostView
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            app._paint_now()
+            await pilot.pause()
+            # Pick a busy host sitting low in the table and make it free.
+            rows = app.visible_hosts()
+            target = next((h for h in reversed(rows) if h.verdict == BUSY), None)
+            assert target is not None
+            rank_before = [h.name for h in rows].index(target.name)
+            app._sort_mode = "availability"
+            key_busy = app._availability_key(target, frozen=True)
+            target_verdict = target.verdict
+            return rank_before, key_busy[0], target_verdict
+
+    rank_before, band, verdict = run(go())
+    assert verdict == BUSY and band > 0
+    # A FREE key sorts above a BUSY one regardless of the sticky rank.
+    freeish = HostView(name="x", reachable=True)
+    freeish.accel = None
+    assert FREE != BUSY
