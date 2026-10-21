@@ -360,3 +360,43 @@ def test_state_sort_keeps_every_verdict_in_one_block():
             assert v not in seen, f"{v} appears in two separate blocks"
             seen.append(v)
     assert verdicts == sorted(verdicts, key=list(dict.fromkeys(verdicts)).index)
+
+
+def test_header_click_matches_through_the_clickable_marker():
+    """Regression: the `▾` marker broke the lookup while the handler still fired.
+
+    `_header()` decorates the sortable titles so they read as clickable, so
+    `event.label` is `"ADDRESS ▾"`. A dict keyed on `"ADDRESS"` misses, `wanted` comes
+    back None, and the handler falls through to "restore the default" — every click
+    silently did nothing, with no error anywhere. This asserts the decoration and the
+    lookup stay in sync.
+    """
+    from textual.widgets import DataTable
+
+    from jms_top.tui import COLUMNS, _header
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            table = app.query_one("#table", DataTable)
+            results = {}
+            for label in ("ADDRESS", "KIND", "STATE"):
+                idx = COLUMNS.index(label)
+                app._sort_mode = "availability"
+                # Feed the *rendered* label, decoration and all — that is what a click
+                # carries.
+                app.on_data_table_header_selected(
+                    DataTable.HeaderSelected(
+                        table, table.ordered_columns[idx].key, idx, _header(label)
+                    )
+                )
+                results[label] = app._sort_mode
+            return results
+
+    results = run(go())
+    assert results == {"ADDRESS": "address", "KIND": "kind", "STATE": "state"}, results
+    assert str(_header("ADDRESS")).strip() != "ADDRESS", "no marker: test proves nothing"

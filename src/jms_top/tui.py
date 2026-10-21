@@ -108,6 +108,9 @@ SORT_MODES = ("availability", "address", "kind", "state")
 
 #: Which column header selects which ordering.
 SORT_COLUMNS = {"ADDRESS": "address", "KIND": "kind", "STATE": "state"}
+#: The same mapping by column position in `COLUMNS`, which is what a click reports.
+#: Derived, never written by hand — see the note in `on_data_table_header_selected`.
+SORT_BY_INDEX = {list(COLUMNS).index(name): mode for name, mode in SORT_COLUMNS.items()}
 
 DASH = "—"
 
@@ -677,8 +680,17 @@ class JmsTopApp(App):
         returns to availability — which has to stay reachable without a second key,
         because "where are the free machines" is the question this tool answers.
         """
-        label = str(event.label).strip()
-        wanted = SORT_COLUMNS.get(label)
+        # Match on the column *position*, not the rendered label. The label carries
+        # the `▾` clickable marker, so keying on text means the decoration and the
+        # lookup have to be kept in sync by hand — which they were not, and the first
+        # version of this handler silently did nothing on every click. The index is
+        # stable because `COLUMNS` is what built the table.
+        wanted = (
+            SORT_BY_INDEX.get(event.column_index)
+            if 0 <= event.column_index < len(COLUMNS)
+            else None
+        )
+        label = COLUMNS[event.column_index] if wanted else ""
         self._sort_mode = "availability" if wanted in (None, self._sort_mode) else wanted
         self._rendered_rows = []
         self._paint_now()
