@@ -98,11 +98,29 @@ FRAME_INTERVAL = 0.25
 #: screen it is about to change.
 WATCH_HZ = 1.0
 
-#: Orderings the table can use, cycled with `u`. Availability first, because that is
-#: the question the tool exists to answer; the others are for *finding* a machine.
+#: Orderings the table can use. `availability` is the default and what the table
+#: returns to, because it is the question the tool exists to answer. The other two are
+#: for *finding* a machine rather than a free slot, and are reached by **clicking the
+#: column header** — `ADDRESS` sorts by address, `KIND` groups by accelerator — which is
+#: where a reader looks to reorder a table. Clicking the same header again goes back to
+#: availability, so the useful order is always one click away.
 SORT_MODES = ("availability", "address", "kind")
 
+#: Which column header selects which ordering.
+SORT_COLUMNS = {"ADDRESS": "address", "KIND": "kind"}
+
 DASH = "—"
+
+
+def _header(col: str) -> Text:
+    """A column title; the sortable ones are underlined so they read as clickable.
+
+    `ADDRESS` and `KIND` reorder the table when clicked. Marking just those two costs
+    nothing and stops the rest looking broken for not responding.
+    """
+    if col in SORT_COLUMNS:
+        return Text(f"{col} ▾", style="underline")
+    return Text(col)
 
 
 def _address_key(host: HostView) -> tuple:
@@ -186,7 +204,7 @@ class JmsTopApp(App):
         Binding("space", "toggle_pause", "pause"),
         Binding("i", "slower", "interval+"),
         Binding("o", "faster", "interval-"),
-        Binding("u", "cycle_sort", "sort"),
+        Binding("u", "cycle_sort", "sort", show=False),
         Binding("ctrl+r", "reload", "reload", show=False),
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
@@ -240,7 +258,7 @@ class JmsTopApp(App):
     def on_mount(self) -> None:
         table = self.query_one("#table", DataTable)
         for col in COLUMNS:
-            table.add_column(col, key=col)
+            table.add_column(_header(col), key=col)
         self.query_one("#command", Input).display = False
         self.query_one("#log", RichLog).display = False
         self._render()
@@ -473,8 +491,7 @@ class JmsTopApp(App):
         text = Text("  ".join(keys), style="dim")
         # The current ordering is shown, not just the key that changes it: after a
         # `u` the table looks shuffled for no stated reason otherwise.
-        if self._sort_mode != SORT_MODES[0]:
-            text.append(f"  [{self._sort_mode}]", style="bold cyan")
+        text.append(f"  [{self._sort_mode}]", style="bold cyan")
         if self._watcher is not None:
             text.append("  ^r reload", style="dim")
         if self._restart_pending:
@@ -579,7 +596,7 @@ class JmsTopApp(App):
         table = self.query_one("#table", DataTable)
         table.clear(columns=True)
         for col in COLUMNS:
-            table.add_column(col, key=col)
+            table.add_column(_header(col), key=col)
         self.query_one("#command", Input).display = False
         self.query_one("#log", RichLog).display = False
         self._rendered_rows = []
@@ -645,6 +662,22 @@ class JmsTopApp(App):
         self.monitor.base_interval = max(1.0, self.monitor.base_interval / 2)
         self.monitor.view.interval = self.monitor.base_interval
         self._paint_now()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Clicking a header sorts by that column; clicking it again goes back.
+
+        The table headers are the affordance a reader already knows for "reorder this",
+        so `ADDRESS` and `KIND` are clickable. Any other header, or the same one twice,
+        returns to availability — which has to stay reachable without a second key,
+        because "where are the free machines" is the question this tool answers.
+        """
+        label = str(event.label).strip()
+        wanted = SORT_COLUMNS.get(label)
+        self._sort_mode = "availability" if wanted in (None, self._sort_mode) else wanted
+        self._rendered_rows = []
+        self._paint_now()
+        if self._sort_mode != "availability":
+            self.log(f"sorted by {label.lower()}")
 
     def action_cycle_sort(self) -> None:
         """Cycle the ordering: availability -> address -> kind -> availability.

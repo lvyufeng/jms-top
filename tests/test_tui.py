@@ -263,3 +263,60 @@ def _grouped(rows):  # noqa: ANN001, ANN202
     if cur:
         out.append(cur)
     return out
+
+
+def test_clicking_a_header_sorts_and_clicking_again_restores_availability():
+    """The headers are the affordance: ADDRESS sorts by IP, KIND groups by accelerator.
+
+    Clicking the active one, or any other header, returns to availability — that order
+    must always be one click away because it is the question the tool answers.
+    """
+    from rich.text import Text
+    from textual.widgets import DataTable
+
+    from jms_top.tui import COLUMNS
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(140, 34)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            table = app.query_one("#table", DataTable)
+
+            def click(label):
+                idx = COLUMNS.index(label)
+                app.on_data_table_header_selected(
+                    DataTable.HeaderSelected(
+                        table, table.ordered_columns[idx].key, idx, Text(label)
+                    )
+                )
+
+            states = [app._sort_mode]
+            click("ADDRESS")
+            states.append(app._sort_mode)
+            addrs = [h.address for h in app.visible_hosts() if h.address]
+            click("KIND")
+            states.append(app._sort_mode)
+            labels = [h.family_label for h in app.visible_hosts()]
+            click("KIND")  # same header again -> back to the default
+            states.append(app._sort_mode)
+            click("ADDRESS")
+            click("HOST")  # an unrelated header also returns
+            states.append(app._sort_mode)
+            return states, addrs, labels
+
+    states, addrs, labels = run(go())
+    assert states == ["availability", "address", "kind", "availability", "availability"]
+    assert addrs == sorted(addrs, key=lambda a: [int(x) for x in a.split(".")])
+    assert labels == sorted(labels), "KIND did not group the families"
+
+
+def test_sortable_headers_are_marked():
+    """Only ADDRESS and KIND respond to a click, so only they get the marker."""
+    from jms_top.tui import _header
+
+    assert str(_header("ADDRESS")).strip() == "ADDRESS ▾"
+    assert str(_header("KIND")).strip() == "KIND ▾"
+    assert str(_header("STATE")).strip() == "STATE"

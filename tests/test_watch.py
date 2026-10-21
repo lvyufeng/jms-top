@@ -219,7 +219,7 @@ def test_address_column_shows_the_ip_and_degrades_to_dash():
             app._render()
             await pilot.pause()
             table = app.query_one("#table", DataTable)
-            assert "ADDRESS" in [str(c.label) for c in table.columns.values()]
+            assert "ADDRESS" in [str(c.label).split()[0] for c in table.columns.values()]
             hosts = app.visible_hosts()
             address_cells = [str(table.get_row_at(row)[1]) for row in range(len(hosts))]
             for host, cell in zip(hosts, address_cells, strict=True):
