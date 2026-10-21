@@ -226,13 +226,26 @@ _HYGON = (
     '[ -n "$c" ] && echo "$p $u $c"; '
     "done 2>/dev/null | head -40; fi"
 )
+#: 天数智芯 (Iluvatar) BI-V150. Two traps, both seen on the live fleet:
+#:
+#: * **``ixsmi`` is not on ``PATH``** and the install directory is *versioned* on some
+#:   hosts and not on others: u101 has ``/usr/local/corex/bin/ixsmi``, u180 has
+#:   ``/usr/local/corex-4.5.0.20260509/bin/ixsmi`` and no unversioned symlink at all.
+#:   Hard-coding one path meant u180's 16 cards were invisible while its neighbours
+#:   worked — so every ``corex*`` directory is tried, newest version last-sorted first.
+#: * **The library path must match the binary.** ``ixsmi`` links against ``lib`` in the
+#:   *same* tree; pointing ``LD_LIBRARY_PATH`` at a different version fails to load.
+#:   The root is derived from whichever ``ixsmi`` was found rather than hard-coded.
 _ILUVATAR = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "X=$(command -v ixsmi 2>/dev/null); "
-    '[ -n "$X" ] || { [ -x /usr/local/corex/bin/ixsmi ] '
-    "&& X=/usr/local/corex/bin/ixsmi; }; "
+    'if [ -z "$X" ]; then '
+    'for c in /usr/local/corex*/bin/ixsmi; do [ -x "$c" ] && X=$c; done; '
+    "fi; "
     "if [ -n \"$X\" ]; then echo '##ILUVATAR'; "
-    'out=$(LD_LIBRARY_PATH=/usr/local/corex/lib:${LD_LIBRARY_PATH:-} $T "$X" 2>/dev/null); '
+    # root = the directory holding bin/ — lib/ sits beside it
+    "R=${X%/bin/*}; "
+    'out=$(LD_LIBRARY_PATH=$R/lib:$R/lib64:${LD_LIBRARY_PATH:-} $T "$X" 2>/dev/null); '
     "[ $? -eq 124 ] && echo '##STALLED:iluvatar:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; fi"
 )

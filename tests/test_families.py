@@ -361,12 +361,12 @@ def test_iluvatar_reading_a_process_makes_the_card_busy():
 
 
 def test_iluvatar_is_probed_from_the_corex_path():
-    """`ixsmi` is under /usr/local/corex/bin and needs that tree's LD_LIBRARY_PATH."""
+    """`ixsmi` is under a corex tree and needs that tree's LD_LIBRARY_PATH."""
     from jms_top.probe import build_script
 
     script = build_script("fleet")
-    assert "/usr/local/corex/bin/ixsmi" in script
-    assert "LD_LIBRARY_PATH=/usr/local/corex/lib" in script
+    assert "/usr/local/corex" in script
+    assert "LD_LIBRARY_PATH=" in script
 
 
 # --- Hygon DCU (海光) -----------------------------------------------------------
@@ -483,3 +483,22 @@ def test_multi_chip_boards_report_boards_not_devices():
     single = HostView(name="a800", accel=FAMILIES["nvidia"].parse(load("nvidia_a800.txt")))
     assert single.accel.chips_per_card == 1
     assert "×" not in cards_cell(single)
+
+
+def test_iluvatar_is_found_under_a_versioned_corex_root():
+    """`ixsmi`'s install directory carries the version on some hosts and not others.
+
+    u101 has `/usr/local/corex/bin/ixsmi`; u180 has
+    `/usr/local/corex-4.5.0.20260509/bin/ixsmi` and no unversioned symlink, so with the
+    path hard-coded its 16 cards were invisible while its neighbours worked. The
+    library path has to come from the same tree as the binary, or `ixsmi` fails to
+    load a mismatched corex runtime.
+    """
+    from jms_top.probe import build_script
+
+    script = build_script("fleet")
+    assert "/usr/local/corex*/bin/ixsmi" in script, "versioned dirs are not searched"
+    assert "/usr/local/corex/bin/ixsmi" not in script, "the unversioned path is not hard-coded"
+    # root derived from the binary, so lib/ matches it
+    assert "R=${X%/bin/*}" in script
+    assert "LD_LIBRARY_PATH=$R/lib" in script
