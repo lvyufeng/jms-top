@@ -79,6 +79,8 @@ def _users_cell(view: HostView) -> str:
 
 _COLUMNS = [
     ("HOST", 26, lambda v: v.name),
+    # The address, not the inventory key: `ssh`/`ping` need something that resolves.
+    ("ADDRESS", 15, lambda v: v.address or DASH),
     ("PLATFORM", 14, lambda v: v.family_label),
     ("VERDICT", 10, lambda v: verdict_cell(v)),
     ("CARDS", 8, lambda v: f"{v.free_cards}/{v.total}" if v.total else DASH),

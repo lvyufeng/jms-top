@@ -206,3 +206,26 @@ def watch_armed(flag: bool) -> bool:
             return app._watcher is not None
 
     return run(go())
+
+
+def test_address_column_shows_the_ip_and_degrades_to_dash():
+    """The address is what you act on; a missing one is a dash, never blank."""
+
+    async def go():
+        monitor = demo_monitor(interval=60, full_interval=120)
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(160, 34)) as pilot:
+            await monitor.poll()
+            app._render()
+            await pilot.pause()
+            table = app.query_one("#table", DataTable)
+            assert "ADDRESS" in [str(c.label) for c in table.columns.values()]
+            hosts = app.visible_hosts()
+            address_cells = [str(table.get_row_at(row)[1]) for row in range(len(hosts))]
+            for host, cell in zip(hosts, address_cells, strict=True):
+                if host.address:
+                    assert cell == host.address
+                else:
+                    assert cell == "—"
+
+    run(go())

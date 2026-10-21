@@ -8,8 +8,8 @@ matters before you start a job: **which of my machines can I actually take right
 ```
   jms-top    59/152 cards free  (39%)   5 free hosts   12 residual  │ 18/19 up │ next tick in 2.1s · full 4s ago
  Ascend 48   NVIDIA 32   Enflame 16   MetaX 16   MooreThreads 16   Kunlunxin 16   TsingMicro 8
- HOST                KIND           CARD #             CARDS  STATE      LOAD   MEM   CPU   UP      USERS               AGE
- a800-171            NVIDIA         FFFFFFFF            8/8    FREE        2%    8%  39%   126d7h  root                0s
+ HOST                ADDRESS       KIND           CARD #             CARDS  STATE      LOAD   MEM   CPU   UP      USERS               AGE
+ a800-171            10.0.0.12   NVIDIA         FFFFFFFF            8/8    FREE        2%    8%  39%   126d7h  root                0s
  gcu-s60             Enflame        FFFFFFFF            8/8    FREE        9%    3%   0%   120d8h  root                0s
  h800-65             NVIDIA         FFFFFFFF            8/8    FREE        1%   17%  12%   135d2h  root                0s
  mthreads-16         MooreThreads   FFFFFFFF            8/8    FREE        0%    2%   1%   115d20h root                0s

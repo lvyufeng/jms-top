@@ -62,7 +62,20 @@ FILTER_LABELS = {
 }
 
 #: Column order. DataTable sizes each column to its widest cell.
-COLUMNS = ("HOST", "KIND", "CARD #", "CARDS", "STATE", "LOAD", "MEM", "CPU", "UP", "USERS", "AGE")
+COLUMNS = (
+    "HOST",
+    "ADDRESS",
+    "KIND",
+    "CARD #",
+    "CARDS",
+    "STATE",
+    "LOAD",
+    "MEM",
+    "CPU",
+    "UP",
+    "USERS",
+    "AGE",
+)
 
 #: How often the screen is repainted *if* something changed.
 REPAINT_HZ = 10
@@ -108,6 +121,16 @@ def age_text(when: datetime | None) -> str:
     if secs < 5400:
         return f"{int(secs // 60)}m"
     return f"{int(secs // 3600)}h"
+
+
+def _address_cell(host: HostView) -> str:
+    """The machine's own address, or dashes when the inventory did not record one.
+
+    Shown next to the name because ``ssh``/``ping``/``curl`` need the address, not the
+    inventory key — and the key is often an asset name that resolves to nothing outside
+    JumpServer.
+    """
+    return (host.address or DASH)[:15]
 
 
 def _map(view: HostView) -> str:
@@ -314,6 +337,7 @@ class JmsTopApp(App):
         load = None if host.node.load_per_cpu is None else host.node.load_per_cpu * 100
         return [
             row_text(host.name, verdict),
+            row_text(_address_cell(host), verdict),
             row_text(host.family_label, verdict),
             row_text(_map(host), verdict),
             row_text(cards, verdict),

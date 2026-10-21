@@ -235,6 +235,14 @@ def detail_view(view: HostView | None, now: datetime | None = None) -> Text:
         t.append((view.error or "unreachable")[:70], style="red")
     t.append("\n")
 
+    # The address sits directly under the verdict because it is what you act on: copy
+    # it into ssh, ping, or curl. Dashed when the inventory has no address for the host.
+    t.append("ADDRESS  ", style="dim")
+    t.append(view.address or "—", style="bold")
+    if view.group:
+        t.append(f"   group {view.group}", style="dim")
+    t.append("\n")
+
     n = view.node
     t.append("NODE     ", style="dim")
     t.append(f"{n.cpus or DASH}c", style="")
