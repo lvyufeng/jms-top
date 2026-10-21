@@ -11,11 +11,10 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from jms_bridge.config import BastionConfig
-from jms_bridge.inventory import Host, Inventory
-from jms_bridge.ssh import ExecResult
 
+from jms_top.config import Bastion
 from jms_top.cpu import CpuSample, load_per_cpu
+from jms_top.inventory import Host, Inventory
 from jms_top.model import (
     BUSY,
     DOWN,
@@ -30,6 +29,7 @@ from jms_top.model import (
 from jms_top.monitor import FleetMonitor
 from jms_top.probe import SENTINEL, build_script
 from jms_top.scan import parse_reply, parse_system, reached, split_sections
+from jms_top.ssh import ExecResult
 
 # --- fixtures from the live fleet ------------------------------------------------
 
@@ -120,7 +120,7 @@ def make_inventory(names: list[str]) -> Inventory:
 def make_monitor(replies: dict[str, str | Exception], *, interval: float = 1.0, full: float = 2.0):
     names = list(replies)
     return FleetMonitor(
-        cfg=BastionConfig(url="https://bastion.example.invalid"),
+        bastion=Bastion(url="https://bastion.example.invalid"),
         inventory=make_inventory(names),
         runner=FakeRunner(replies),
         interval=interval,

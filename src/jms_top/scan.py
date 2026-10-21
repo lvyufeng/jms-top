@@ -239,8 +239,8 @@ def reached(text: str) -> bool:
     """Whether a reply proves the script ran on the far side.
 
     KoKo rejects a connection with ssh exit **0** and the error on stdout, so a
-    sentinel in the output is the only trustworthy liveness signal — same reasoning
-    as ``jms_bridge.ssh.reached``. Only the first few lines are searched: the sentinel
+    sentinel in the output is the only trustworthy liveness signal. Only the first few
+    lines are searched: the sentinel
     is the first thing either script prints, and a process command line further down
     must not be able to fake it.
     """

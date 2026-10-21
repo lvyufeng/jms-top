@@ -1,7 +1,7 @@
 # Architecture
 
 ```
- hosts.yaml (jms-bridge)          JumpServer KoKo           vendor SMI on the host
+ hosts.yaml (~/.config/jms-top)   JumpServer KoKo           vendor SMI on the host
         │                               │                          │
         ▼                               ▼                          ▼
   inventory.py ──► monitor.FleetMonitor ──► ssh.SSHRunner ──► probe.py (bash)
@@ -20,6 +20,10 @@ Each layer has one job, and the expensive one (SSH) is confined to a single clas
 
 | module | responsibility | never does |
 |---|---|---|
+| `config.py` | read `config.toml`, cache the token at 0600, write starters | talk to the network |
+| `auth.py` | REST login, asset discovery | store a password unless asked |
+| `inventory.py` | `hosts.yaml` → `Host`, selectors, KoKo login strings | dial out |
+| `ssh.py` | ControlMaster data plane, the reachability sentinel | parse anything |
 | `probe.py` | the remote bash: what to ask each vendor tool for | parse anything |
 | `families.py` | per-vendor parsing → `Card` / `Proc` | touch the network |
 | `scan.py` | split a reply into sections and fill a `HostView` | judge a host |

@@ -28,9 +28,8 @@ Four more decisions, and why:
   answers in milliseconds, so the fleet shows *which hosts are up* before the first
   full scan instead of after it.
 * **One fan-out cap for both rounds.** The bastion limits concurrent connections per
-  account; jms-bridge's ``max_parallel`` is the cap everyone else honours, so this one
-  does too — and sharing one :class:`asyncio.Semaphore` means an overlapping full tick
-  cannot double the fleet's connection count.
+  account, so every round goes through one :class:`asyncio.Semaphore` — an overlapping
+  full tick then cannot double the fleet's connection count.
 * **Per-host failure backoff.** A host that keeps failing is full-polled less often,
   and a positive answer from either round clears the count, so one unreachable asset
   cannot dominate every tick.
@@ -46,14 +45,13 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from jms_bridge.config import BastionConfig, ConfigError, load_config
-from jms_bridge.inventory import Host, Inventory, InventoryError
-from jms_bridge.ssh import ExecResult, SSHRunner, failure_reason
-
+from .config import Bastion, ConfigError, load_settings
 from .cpu import CpuSample, load_per_cpu
+from .inventory import Host, Inventory, InventoryError
 from .model import FREE, FleetView, HostView, NodeStats
 from .probe import PING_SCRIPT, SENTINEL, ProbeLimits, build_script, with_sentinel
 from .scan import parse_reply, reached
+from .ssh import ExecResult, SSHRunner, failure_reason
 
 #: How many times slower a full tick runs on a host with nothing free.
 IDLE_FACTOR = 3.0
@@ -69,7 +67,7 @@ class MonitorError(RuntimeError):
 
 
 class FleetMonitor:
-    """Builds the host list from the jms-bridge inventory and polls it."""
+    """Builds the host list from the inventory and polls it."""
 
     def __init__(
         self,
@@ -77,7 +75,7 @@ class FleetMonitor:
         targets: list[str] | None = None,
         interval: float = 3.0,
         full_interval: float | None = None,
-        cfg: BastionConfig | None = None,
+        bastion: Bastion | None = None,
         inventory: Inventory | None = None,
         runner: SSHRunner | None = None,
         limits: ProbeLimits | None = None,
@@ -86,14 +84,16 @@ class FleetMonitor:
         log: Callable[[str], None] | None = None,
     ):
         try:
-            self.cfg = cfg or load_config()
+            if bastion is None:
+                bastion = load_settings().bastion
+            self.bastion = bastion
             self.inventory = inventory or Inventory.load()
         except (ConfigError, InventoryError) as exc:
-            # Translate the bridge's config errors into this tool's, so the CLI prints
-            # one line of advice instead of a traceback.
+            # One line of advice, not a traceback: these are first-run mistakes
+            # (no config, no inventory), which every user hits exactly once.
             raise MonitorError(str(exc)) from exc
         self._owns_runner = runner is None
-        self.runner = runner or SSHRunner(self.cfg, max_parallel=self.cfg.max_parallel)
+        self.runner = runner or SSHRunner(bastion, max_parallel=bastion.max_parallel)
         self.limits = limits or ProbeLimits()
         self.nvidia_tile = nvidia_tile
         self.timeout = timeout
@@ -306,14 +306,13 @@ class FleetMonitor:
     async def _run(self, host: Host, script: str, *, timeout: float) -> ExecResult | Exception:
         """Run one script on one host; a failure is returned, never raised.
 
-        ``workdir=False`` and ``env_setup=False``: looking at a host is not running a
-        job on it, and the poll must succeed on a host whose dev env is broken (see
-        the module note in :mod:`jms_top.probe`).
+        The runner runs the script as-is: no ``env_setup``, no ``cd`` into a workdir.
+        Looking at a host is not running a job on it, and the poll must succeed on a
+        host whose dev environment is broken — which is exactly when you want the
+        screen to still tell you the machine is up and idle.
         """
         try:
-            return await self.runner.exec_on(
-                host, script, timeout=timeout, workdir=False, env_setup=False
-            )
+            return await self.runner.exec_on(host, script, timeout=timeout)
         except Exception as exc:  # noqa: BLE001 - one host's failure is that host's
             return exc
 

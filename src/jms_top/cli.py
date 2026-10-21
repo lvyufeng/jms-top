@@ -8,6 +8,13 @@ The sub-commands exist so the monitor is usable where a terminal is not:
 * ``jms-top --hosts a,b --json``: snapshot a few machines by name / group / tag.
 * ``jms-top --demo``: the TUI against the recorded fleet in ``tests/fixtures``, so the
   interface can be explored (and demoed) with no bastion at all.
+
+And four verbs for the first run, so nothing has to be set up by hand::
+
+    jms-top init      # write ~/.config/jms-top/{config.toml,hosts.yaml}
+    jms-top login     # username + password -> cached session token
+    jms-top hosts     # list what is configured; --discover drafts it from JumpServer
+    jms-top logout    # drop the cached token
 """
 
 from __future__ import annotations
@@ -15,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import pathlib
 import signal
 import sys
 from datetime import datetime, timezone
@@ -31,15 +39,46 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
+  jms-top init                  # first run: write a starter config + inventory
+  jms-top login                 # log in to JumpServer (password -> token)
+  jms-top hosts --discover      # draft the inventory from the assets you can reach
   jms-top                       # every host in the inventory
-  jms-top -t ascend,gpu         # a group or tag, as jms-bridge selectors
-  jms-top -i 3                  # poll every 3s instead of 5s
+  jms-top -t ascend,gpu         # a group or tag
   jms-top --once --json | jq    # one round, machine-readable
   jms-top --ping                # liveness only
   jms-top --demo                # the TUI on recorded data, no bastion needed
 """,
     )
+    p.add_argument(
+        "command",
+        nargs="?",
+        choices=["init", "login", "logout", "hosts"],
+        help="set-up verbs: init / login / logout / hosts (omit to open the TUI)",
+    )
     p.add_argument("hosts", nargs="*", help="host names / groups / tags (default: all)")
+
+    # --- `login` / `logout` / `hosts` options ---
+    p.add_argument("-u", "--user", help="login: JumpServer username")
+    p.add_argument("-p", "--password", help="login: password (else prompt / env / saved)")
+    p.add_argument(
+        "--save-password",
+        action="store_true",
+        help="login: store the password in a 0600 file for next time",
+    )
+    p.add_argument(
+        "--forget-password", action="store_true", help="logout: also delete the saved password"
+    )
+    p.add_argument(
+        "--discover",
+        action="store_true",
+        help="hosts: list the assets this account can reach (and draft an inventory)",
+    )
+    p.add_argument(
+        "--write",
+        metavar="PATH",
+        help="hosts --discover: write the drafted inventory here (default: show it)",
+    )
+    p.add_argument("--force", action="store_true", help="init: overwrite existing files")
     p.add_argument("-t", "--target", action="append", default=[], help="selector (repeatable)")
     p.add_argument(
         "-i", "--interval", type=float, default=3.0, help="CPU poll interval, seconds (default 3)"
@@ -89,6 +128,11 @@ def _exit_on_broken_pipe() -> None:
 def main(argv: list[str] | None = None) -> int:
     _exit_on_broken_pipe()
     args = _build_parser().parse_args(argv)
+
+    if args.command == "init":
+        return _cmd_init(args)
+    if args.command in {"login", "logout", "hosts"}:
+        return asyncio.run(_cmd_auth(args))
     # `jms-top metax,ascend` reads as two selectors to anyone who has used a shell, so
     # commas split — the same rule an inventory selector already follows.
     targets = [
@@ -146,6 +190,153 @@ def main(argv: list[str] | None = None) -> int:
         print(f"jms-top: {exc}", file=sys.stderr)
         return 2
     JmsTopApp(monitor).run()
+    return 0
+
+
+# --- set-up verbs ---------------------------------------------------------------
+
+
+def _cmd_init(args) -> int:  # noqa: ANN001 - argparse.Namespace
+    """Write the config + inventory templates, never clobbering what is there."""
+    from .config import config_path, inventory_path, write_starter_files
+
+    written = write_starter_files(force=args.force)
+    config, inv = config_path(), inventory_path()
+    if not written:
+        print(f"already configured:\n  {config}\n  {inv}\n(nothing to do; --force to rewrite)")
+        return 0
+    for path in written:
+        print(f"wrote {path}")
+    print(
+        "\nnext:\n"
+        f"  1. set bastion.url and bastion.login in {config}\n"
+        "  2. jms-top login        (or ssh keys, if JumpServer already knows yours)\n"
+        "  3. jms-top hosts --discover --write   (build the inventory from your assets)"
+    )
+    return 0
+
+
+async def _cmd_auth(args) -> int:  # noqa: ANN001 - argparse.Namespace
+    from .config import ConfigError, load_settings
+
+    if args.command == "init":  # pragma: no cover - init is synchronous
+        return _cmd_init(args)
+
+    try:
+        settings = load_settings(require_url=args.command != "logout")
+    except ConfigError as exc:
+        print(f"jms-top: {exc}", file=sys.stderr)
+        return 2
+
+    if args.command == "logout":
+        return _cmd_logout(args)
+    if args.command == "hosts":
+        return await _cmd_hosts(args, settings)
+    return await _cmd_login(args, settings)
+
+
+def _cmd_logout(args) -> int:  # noqa: ANN001
+    from .config import clear_token, credentials_path, forget_password
+
+    cleared = clear_token()
+    print("session token cleared" if cleared else "no cached session token")
+    if args.forget_password:
+        print("saved password deleted" if forget_password() else "no saved password")
+    elif credentials_path().exists():
+        print(f"a saved password is still at {credentials_path()} (--forget-password to delete)")
+    return 0
+
+
+async def _cmd_login(args, settings) -> int:  # noqa: ANN001
+    import getpass
+    import os
+
+    from .auth import AuthError, login
+    from .config import ConfigError, _saved_password
+
+    username = args.user or settings.bastion.login or os.environ.get("JMS_TOP_USER")
+    password = args.password or os.environ.get("JMS_TOP_PASSWORD") or _saved_password()
+    if not username:
+        username = input("JumpServer username: ").strip()
+    if not password:
+        if not sys.stdin.isatty():
+            print(
+                "jms-top: no password — pass -p, set JMS_TOP_PASSWORD, "
+                "or log in once with --save-password",
+                file=sys.stderr,
+            )
+            return 2
+        # getpass keeps it off the screen and out of the shell history, which is what
+        # a -p argument cannot promise.
+        password = getpass.getpass(f"JumpServer password for {username}: ")
+    if not username or not password:
+        print("jms-top: need a username and a password", file=sys.stderr)
+        return 2
+
+    try:
+        result = await login(settings, username, password, save=args.save_password)
+    except (AuthError, ConfigError) as exc:
+        print(f"jms-top: login failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"logged in as {result.username}")
+    print(f"session token cached in {result.config_file} (mode 600)")
+    if result.password_saved:
+        print(f"password saved to {result.password_saved}")
+    print(
+        "\nthe SSH data plane still needs a way in: a key JumpServer knows (ssh-key) "
+        "or [bastion] ssh_password"
+    )
+    return 0
+
+
+async def _cmd_hosts(args, settings) -> int:  # noqa: ANN001
+    from .auth import AuthError, discover_assets
+    from .config import ConfigError, write_private
+    from .inventory import Inventory, InventoryError, draft_inventory
+
+    if args.discover:
+        try:
+            assets = await discover_assets(settings)
+        except (AuthError, ConfigError) as exc:
+            print(f"jms-top: cannot list assets: {exc}", file=sys.stderr)
+            return 1
+        if not assets:
+            print("no assets visible to this account", file=sys.stderr)
+            return 1
+        for asset in assets:
+            accounts = ",".join(asset.accounts) or "-"
+            print(f"{asset.name:<28} {accounts:<12} {asset.id}  {asset.address or ''}")
+        print(f"\n{len(assets)} assets")
+        text = draft_inventory(
+            [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "address": a.address,
+                    "platform": a.platform,
+                    "tags": a.tags,
+                    "account": a.accounts[0] if a.accounts else None,
+                }
+                for a in assets
+            ]
+        )
+        if args.write:
+            write_private(pathlib.Path(args.write).expanduser(), text)
+            print(f"drafted inventory written to {args.write}")
+        else:
+            print("\n--- draft inventory (pass --write PATH to save) ---")
+            print(text)
+        return 0
+
+    try:
+        inventory = Inventory.load()
+    except InventoryError as exc:
+        print(f"jms-top: {exc}", file=sys.stderr)
+        return 2
+    for host in inventory.hosts.values():
+        group = inventory.group_of(host.name) or "-"
+        print(f"{host.name:<28} {group:<12} {host.platform:<14} {host.asset_id or '-'}")
+    print(f"\n{len(inventory.hosts)} hosts from {inventory.path}")
     return 0
 
 

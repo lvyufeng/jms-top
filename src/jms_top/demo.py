@@ -25,12 +25,11 @@ import re
 import time
 from pathlib import Path
 
-from jms_bridge.config import BastionConfig
-from jms_bridge.inventory import Host, Inventory
-from jms_bridge.ssh import ExecResult
-
+from .config import Bastion
+from .inventory import Host, Inventory
 from .monitor import FleetMonitor
 from .probe import SENTINEL
+from .ssh import ExecResult
 from .tui import JmsTopApp
 
 DEMO_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "demo"
@@ -95,9 +94,10 @@ def demo_inventory() -> Inventory:
         )
         for name, row in snapshot["hosts"].items()
     }
-    return Inventory(
-        hosts=hosts, groups={k: list(v) for k, v in snapshot.get("groups", {}).items()}
-    )
+    groups = {k: list(v) for k, v in snapshot.get("groups", {}).items()}
+    # Demo hosts carry no asset id: nothing dials out, and an inventory entry that
+    # cannot become a KoKo login string must not pretend it could.
+    return Inventory(hosts=hosts, groups=groups, path=SNAPSHOT)
 
 
 def _snapshot() -> dict:
@@ -109,7 +109,7 @@ def _snapshot() -> dict:
 def demo_monitor(*, interval: float = 3.0, full_interval: float | None = None) -> FleetMonitor:
     """A :class:`FleetMonitor` wired to the recorded fleet instead of SSH."""
     return FleetMonitor(
-        cfg=BastionConfig(url="https://demo.invalid"),
+        bastion=Bastion(url="https://demo.invalid"),
         inventory=demo_inventory(),
         runner=ReplayRunner(_snapshot()),
         interval=interval,

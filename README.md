@@ -46,16 +46,69 @@ Or with [pipx](https://pipx.pypa.io) if you do not want a dev checkout:
 pipx install .
 ```
 
-**No configuration of its own.** It reads the same files as
-[jms-bridge](https://github.com/lvyufeng/jms-agent-bridge):
+**Self-contained.** No other package is needed: config, login, the KoKo SSH data
+plane and every vendor parser live in this repo. Its own files are:
 
-* `~/.config/jms-bridge/hosts.yaml` — which machines exist (names, groups, tags,
-  platform), and any per-host `workspace` entries (ignored by the monitor);
-* `~/.config/jms-bridge/config.toml` — the bastion URL, port, and the KoKo login.
+* `~/.config/jms-top/config.toml` — bastion URL, KoKo port, your login, cached token;
+* `~/.config/jms-top/hosts.yaml` — which machines exist (name → asset id, account,
+  platform, tags).
 
-If `jms-top --ping` works, it is configured. If it does not, it is a bastion/JumpServer
-problem, not a jms-top one — run `jms-bridge hosts` to see the same failure without the
-UI.
+Both are mode 600 in a 700 directory, and both can be relocated with `JMS_TOP_CONFIG` /
+`JMS_TOP_INVENTORY`. Nothing else on the machine has to be configured.
+
+## First run
+
+Three steps, once.
+
+```bash
+jms-top init          # write ~/.config/jms-top/{config.toml,hosts.yaml}
+```
+
+Then edit `config.toml` — it needs two lines:
+
+```toml
+[bastion]
+url = "https://jumpserver.example.com"   # the web UI's address
+ssh_port = 2222                          # KoKo's SSH port (some use 2224)
+login = "your-login"                     # your JumpServer *login*, not the OS account
+```
+
+### Logging in
+
+The two planes authenticate differently, and it is worth knowing which is which:
+
+```bash
+jms-top login            # JumpServer username + password -> cached session token
+```
+
+`login` prompts for the password (never echoed, never in your shell history), exchanges
+it at `POST /api/v1/authentication/auth/`, and caches the returned **session token** in
+`config.toml`. Every later run reuses it, so you log in once per token lifetime.
+`jms-top logout` drops it; `--save-password` keeps the password in a 0600 file if you
+would rather not type it again.
+
+If your KoKo also accepts password auth, put the password under
+`[bastion] ssh_password` (or `JMS_TOP_SSH_PASSWORD`) and install `sshpass`. **An SSH key
+is better**: register a key with JumpServer and skip that field entirely.
+
+```bash
+jms-top hosts --discover          # assets you can reach: name, accounts, id
+jms-top hosts --discover --write  # ...and draft hosts.yaml from them
+```
+
+Check it with `jms-top --ping` (liveness only, seconds) before opening the UI.
+
+If `--ping` says hosts are DOWN, the message on each row is KoKo's own words — "no
+permission", "asset offline", or a refused password — and `jms-top hosts` shows what was
+actually configured.
+
+### Migrating from a jms-bridge inventory
+
+`jms-top` reads the same `hosts.yaml` *shape* (name → `asset_id`/`account`/`platform`/
+`tags`, plus groups), but its own copy, under `~/.config/jms-top/hosts.yaml`. Copy the
+hosts and groups across; jms-top ignores the fields it does not use (`env_setup`,
+`workdir`, `workspaces`). Or regenerate it from JumpServer itself with
+`jms-top hosts --discover --write`.
 
 ## Quick start
 

@@ -1,8 +1,7 @@
 """One parser per accelerator family, and one command snippet to collect them all.
 
-Unlike :mod:`jms_bridge.platforms` — which answers "how many cards *hold a process*"
-for a launch gate — this module parses the **state of every card**: name, utilisation,
-memory, temperature, power, and the processes holding it. A gate only needs a verdict;
+This module parses the **state of every card**: name, utilisation, memory,
+temperature, power, and the processes holding it. A launch gate only needs a verdict;
 a monitor needs the numbers behind it, on the same screen, for every vendor.
 
 Every parser here was written against captured output (``tests/fixtures/``, taken from
@@ -11,8 +10,8 @@ that exercise:
 
 * **A parse failure never reads as "idle".** A card whose numbers did not parse keeps
   them ``None`` and reports its state as unknown — it is shown, and it is not counted
-  as free. The same rule jms-bridge applies to occupancy, for the same reason: a wrong
-  "free" sends work onto someone else's running job.
+  as free. A wrong "free" sends work onto someone else's running job, which is the one
+  failure this whole tool exists to prevent.
 * **A card is busy if a process holds it, whatever the utilisation says.** This is not
   theoretical: ``p800-15`` prints ``0%`` utilisation on cards holding 87% of their
   memory with a vLLM stack on them, and ``tsingmicro-137`` prints ``0%`` on twelve
