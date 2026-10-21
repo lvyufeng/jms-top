@@ -20,6 +20,7 @@ tick shows as an ageing "seen" column rather than a frozen screen.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Input, RichLog, Static
 
+# Imported as a *module*, not as a list of functions: hot reload replaces the module's
+# globals, and a `from .panels import summary_bar` binding would keep pointing at the
+# function object loaded at startup — the reload would run and change nothing on screen.
+from . import panels
 from .model import (
     BUSY,
     DOWN,
@@ -41,7 +46,7 @@ from .model import (
     HostView,
 )
 from .monitor import FleetMonitor
-from .panels import VERDICT_STYLE, cards_panel, detail_view, summary_bar, title_bar
+from .watch import SourceWatcher
 
 #: The filter cycle, in the order ``f`` walks it. ``all`` first, so one keypress from
 #: the default view is "show me only what I can take".
@@ -61,6 +66,10 @@ COLUMNS = ("HOST", "KIND", "CARD #", "CARDS", "STATE", "LOAD", "MEM", "CPU", "UP
 
 #: How often the screen is repainted *if* something changed.
 REPAINT_HZ = 10
+#: How often the source watcher stats the package (one ``stat`` per file). Saves are
+#: not latency-critical, and a second of lag is unnoticeable while you are reading the
+#: screen it is about to change.
+WATCH_HZ = 1.0
 
 DASH = "—"
 
@@ -75,7 +84,7 @@ def verdict_matches(verdict: str, wanted: str) -> bool:
 
 def row_text(value: str, verdict: str) -> Text:
     """One table cell, coloured by the row's verdict."""
-    return Text(value, style=VERDICT_STYLE.get(verdict, ""))
+    return Text(value, style=panels.VERDICT_STYLE.get(verdict, ""))
 
 
 def _fmt_pct(value: float | None) -> str:
@@ -123,15 +132,24 @@ class JmsTopApp(App):
         Binding("i", "slower", "interval+"),
         Binding("o", "faster", "interval-"),
         Binding("u", "sort_kind", "sort"),
+        Binding("ctrl+r", "reload", "reload", show=False),
         Binding("j", "cursor_down", "down", show=False),
         Binding("k", "cursor_up", "up", show=False),
     ]
 
-    def __init__(self, monitor: FleetMonitor, *, demo: bool = False, boot: bool = True):
+    def __init__(
+        self,
+        monitor: FleetMonitor,
+        *,
+        demo: bool = False,
+        boot: bool = True,
+        watch: bool = False,
+    ):
         super().__init__()
         self.monitor = monitor
         self.demo = demo
         self._boot = boot
+        self._watch = watch
         self.filter: str = "all"
         self.needle: str = ""
         self._rendered_generation = -1
@@ -139,6 +157,11 @@ class JmsTopApp(App):
         self._selected: str | None = None
         self._detail_mode = False
         self._sort_mode = "availability"
+        self._watcher: SourceWatcher | None = None
+        self._restart_pending = False
+        # True while the widget tree is being rebuilt. The repaint timer keeps firing
+        # during that window and would otherwise query widgets that have been removed.
+        self._rebuilding = False
 
     # --- composition -----------------------------------------------------------
 
@@ -166,6 +189,12 @@ class JmsTopApp(App):
         self._render()
         self._shown_at = 0.0
         self.set_interval(1.0 / REPAINT_HZ, self._repaint)
+        if self._watch:
+            self._watcher = SourceWatcher()
+            # One stat per source per tick: cheap enough to leave on, and it means an
+            # edit shows up while you are looking at the screen rather than after a
+            # restart you have to remember to do.
+            self.set_interval(WATCH_HZ, self._poll_sources)
         if self._boot:
             self.run_worker(self._boot_loop(), exclusive=True, name="boot")
 
@@ -215,6 +244,8 @@ class JmsTopApp(App):
 
     def _repaint(self) -> None:
         """Repaint only when the data actually moved, or once a second for the clocks."""
+        if self._rebuilding:
+            return
         now = time.monotonic()
         if (
             self.monitor.generation != self._rendered_generation
@@ -224,17 +255,19 @@ class JmsTopApp(App):
             self._render()
 
     def _render(self) -> None:
+        if self._rebuilding:
+            return
         self._rendered_generation = self.monitor.generation
         view = self.monitor.view
         self.query_one("#titlebar", Static).update(self._title(view))
-        self.query_one("#summary", Static).update(summary_bar(view))
+        self.query_one("#summary", Static).update(panels.summary_bar(view))
         self._render_table()
         selected = self.selected_view()
         self.query_one("#cards", Static).update(
-            Text("") if self._detail_mode else cards_panel(selected)
+            Text("") if self._detail_mode else panels.cards_panel(selected)
         )
         self.query_one("#detail", Static).update(
-            self._process_table(selected) if self._detail_mode else detail_view(selected)
+            self._process_table(selected) if self._detail_mode else panels.detail_view(selected)
         )
         self.query_one("#side-title", Static).update(
             "PROCESSES  (esc)" if self._detail_mode else "CARDS"
@@ -242,7 +275,7 @@ class JmsTopApp(App):
         self._render_footer(view)
 
     def _title(self, view: FleetView) -> Text:
-        line = title_bar(view, paused=self.monitor.paused, selected=self._selected)
+        line = panels.title_bar(view, paused=self.monitor.paused, selected=self._selected)
         if self.filter != "all":
             line.append("  [", style="dim")
             line.append(FILTER_LABELS.get(self.filter, self.filter), style="bold yellow")
@@ -323,6 +356,13 @@ class JmsTopApp(App):
             "q quit",
         ]
         text = Text("  ".join(keys), style="dim")
+        if self._watcher is not None:
+            text.append("  ^r reload", style="dim")
+        if self._restart_pending:
+            # Said once, in the place a key would have been: a reload that silently
+            # left half the change unapplied is worse than one that asks.
+            text.append("   │ ", style="dim")
+            text.append("restart to apply monitor/parser changes", style="bold yellow")
         if view.log:
             text.append("   │ ", style="dim")
             text.append(view.log[-1][11:], style="")
@@ -344,6 +384,94 @@ class JmsTopApp(App):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._hide_command()
+
+    # --- live reload -----------------------------------------------------------
+
+    def _poll_sources(self) -> None:
+        """Apply a change to the sources mid-run (see :mod:`jms_top.watch`)."""
+        if self._watcher is None or self._rebuilding:
+            # A rebuild in flight will re-stat on its own next tick; queueing here would
+            # stack reloads on top of each other while the widgets are half-swapped.
+            return
+        change = self._watcher.check()
+        if change.any:
+            self.apply_change(change)
+
+    def apply_change(self, change) -> None:  # noqa: ANN001 - watch.Change
+        """Reload the changed modules and repaint, keeping the monitor and its data.
+
+        The monitor is deliberately untouched: its SSH connections and its last round
+        are the state worth keeping, and rebuilding the widgets around them costs one
+        frame. Modules that cannot be swapped safely (the poller, the parsers) are
+        reported instead of reloaded — a half-swapped parser reading a live reply is a
+        much worse outcome than a line of text asking for a restart.
+        """
+        from .watch import describe, reload_modules
+
+        reloaded, failed = reload_modules(change.reloadable)
+        if change.stylesheet:
+            self.refresh_css()
+        if failed:
+            self.log(f"reload failed (still running the old code): {failed[0]}"[:160])
+            return
+        if change.needs_restart:
+            self._restart_pending = True
+        self.log(f"hot reload: {describe(change)}"[:160])
+        # Not `run_worker(exclusive=True)`: a second save while the first rebuild is
+        # still mounting would cancel it mid-swap and leave an empty screen. The
+        # `_rebuilding` guard above keeps them serial instead.
+        self.run_worker(self._rebuild(), exclusive=False, name="reload")
+
+    async def _rebuild(self) -> None:
+        """Recompose every widget from the live monitor state.
+
+        ``recompose()`` removes the children and calls ``compose`` again — and because
+        ``compose`` builds *new* widget objects each time, the new tree is drawn by the
+        reloaded ``panels`` module. (Driving ``remove``/``mount_all`` by hand does not
+        work: ``compose`` uses ``with`` blocks that need the stack ``recompose`` sets
+        up, and calling it outside that raises ``IndexError``.)
+
+        The repaint timer is paused for the swap — it would otherwise query widgets that
+        have just been removed.
+        """
+        self._rendered_rows = []
+        self._rendered_generation = -1
+        self._rebuilding = True
+        try:
+            await self.recompose()
+            await self._after_rebuild()
+        finally:
+            # A failed rebuild must leave a repaintable screen behind, not a frozen one;
+            # the widgets that did mount are the ones just composed.
+            self._rebuilding = False
+            self._rendered_generation = -1
+
+    async def _after_rebuild(self) -> None:
+        """Re-apply mount-time wiring on the fresh widgets, then paint.
+
+        Idempotent on purpose: ``recompose()`` re-runs ``compose``, which returns the
+        *same* widget objects, so a DataTable that already has its columns is not
+        "fresh" — it is the one that was on screen a moment ago. Clearing first makes
+        the rebuild safe to run any number of times.
+        """
+        table = self.query_one("#table", DataTable)
+        table.clear(columns=True)
+        for col in COLUMNS:
+            table.add_column(col, key=col)
+        self.query_one("#command", Input).display = False
+        self.query_one("#log", RichLog).display = False
+        self._rendered_rows = []
+        self._render()
+        # One idle tick so the freshly mounted widgets are laid out before the paint
+        # that follows; without it the first frame after a reload can be a frame of
+        # empty cells.
+        await asyncio.sleep(0)
+
+    def action_reload(self) -> None:
+        """Force a reload now — for an edit the watcher missed, or after a checkout."""
+        from .watch import Change
+
+        self.apply_change(Change({"jms_top.panels", "jms_top.render", "jms_top.tui"}, set(), True))
 
     # --- actions ---------------------------------------------------------------
 

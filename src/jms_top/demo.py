@@ -117,11 +117,13 @@ def demo_monitor(*, interval: float = 3.0, full_interval: float | None = None) -
     )
 
 
-def run_demo(*, interval: float = 3.0, once: bool = False, as_json: bool = False) -> int:
+def run_demo(
+    *, interval: float = 3.0, once: bool = False, as_json: bool = False, watch: bool = True
+) -> int:
     monitor = demo_monitor(interval=interval)
     if once or as_json:
         from .cli import run_monitor_once
 
         return asyncio.run(run_monitor_once(monitor, as_json=as_json))
-    JmsTopApp(monitor, demo=True).run()
+    JmsTopApp(monitor, demo=True, watch=watch).run()
     return 0

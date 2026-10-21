@@ -188,7 +188,25 @@ queue rounds back to back.
 | `space` | pause / resume polling (the screen keeps showing what it has) |
 | `i` / `o` | poll **slower** / **faster** (interval ×2 / ÷2, clamped to 1–60 s) |
 | `u` | sort by availability, or by accelerator family |
+| `ctrl+r` | reload the UI from source now (normally automatic — see below) |
 | `q` | quit |
+
+### Hot reload
+
+Edit anything in `panels.py`, `render.py`, `tui.py` or `app.tcss` while the app is
+running and the screen picks it up within a second, **without losing the connection or
+the data**: the monitor keeps its multiplexed SSH channels and its last round, and only
+the widgets are re-composed around them.
+
+```
+  hot reload: reloaded panels
+```
+
+`ctrl+r` forces a reload (useful after a `git checkout` or an edit the watcher missed).
+Changes to `monitor.py`, `probe.py`, `families.py` or `scan.py` are **not** hot-swapped
+— those hold state that in-flight SSH commands are using — and the footer says
+`restart to apply monitor/parser changes` when it sees one. `--no-watch` turns the
+watcher off entirely.
 
 ## Reading the verdicts
 

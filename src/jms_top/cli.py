@@ -99,6 +99,14 @@ examples:
     p.add_argument("--demo", action="store_true", help="replay the recorded fleet (no SSH)")
     p.add_argument("--no-color", action="store_true", help="disable ANSI colour in text output")
     p.add_argument(
+        "--watch",
+        action="store_true",
+        help="hot-reload the UI when its sources change (default outside --demo)",
+    )
+    p.add_argument(
+        "--no-watch", action="store_true", help="disable hot reload even in a dev checkout"
+    )
+    p.add_argument(
         "--screenshot",
         metavar="PATH.svg",
         help="render one TUI frame to an SVG and exit (for docs; needs --demo or a bastion)",
@@ -154,7 +162,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         from .demo import run_demo
 
-        return run_demo(interval=args.interval, once=args.once, as_json=args.json)
+        return run_demo(
+            interval=args.interval, once=args.once, as_json=args.json, watch=_watch_enabled(args)
+        )
 
     from .monitor import FleetMonitor, MonitorError
 
@@ -189,8 +199,19 @@ def main(argv: list[str] | None = None) -> int:
     except MonitorError as exc:
         print(f"jms-top: {exc}", file=sys.stderr)
         return 2
-    JmsTopApp(monitor).run()
+    JmsTopApp(monitor, watch=_watch_enabled(args)).run()
     return 0
+
+
+def _watch_enabled(args) -> bool:  # noqa: ANN001 - argparse.Namespace
+    """Hot reload is on by default unless told otherwise.
+
+    The cost is one ``stat`` per source file per second and nothing else, and the
+    benefit — an edit landing while you watch — is only useful if you do not have to
+    know about a flag to get it. ``--no-watch`` exists for the case where the running
+    code must not move under an operator's feet.
+    """
+    return not args.no_watch
 
 
 # --- set-up verbs ---------------------------------------------------------------
