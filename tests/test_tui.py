@@ -400,3 +400,34 @@ def test_header_click_matches_through_the_clickable_marker():
     results = run(go())
     assert results == {"ADDRESS": "address", "KIND": "kind", "STATE": "state"}, results
     assert str(_header("ADDRESS")).strip() != "ADDRESS", "no marker: test proves nothing"
+
+
+def test_column_widths_are_fixed_so_clicks_land_where_they_point():
+    """A content-sized column slides the whole table right as a scan fills it in.
+
+    `CARD #` is `—` before a host has been polled and `16/16` after, so its width grew
+    mid-scan. Every column to its right shifted, and a click on STATE landed on
+    whichever column had slid under the pointer — the reported symptom was "clicking
+    STATE during a scan does nothing", because it was hitting MEM.
+    """
+    from jms_top.tui import COLUMN_WIDTHS, COLUMNS
+
+    assert set(COLUMN_WIDTHS) == set(COLUMNS), "a column has no fixed width"
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(170, 40)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            table = app.query_one("#table", DataTable)
+            before = [c.width for c in table.ordered_columns]
+            # A scan changes cell contents and `scanning`, never the layout.
+            monitor.view.scanning = True
+            monitor._touch()
+            await pilot.pause()
+            return before, [c.width for c in table.ordered_columns]
+
+    before, after = run(go())
+    assert before == after, f"columns resized mid-scan: {before} -> {after}"
+    assert before == [COLUMN_WIDTHS[c] for c in COLUMNS]

@@ -108,6 +108,24 @@ SORT_MODES = ("availability", "address", "kind", "state")
 
 #: Which column header selects which ordering.
 SORT_COLUMNS = {"ADDRESS": "address", "KIND": "kind", "STATE": "state"}
+#: Fixed widths, wide enough for the longest value each column can hold. Sized from the
+#: content would be prettier and would drift mid-scan; a table that resizes under the
+#: pointer is not worth it.
+COLUMN_WIDTHS = {
+    "HOST": 20,
+    "ADDRESS": 17,
+    "KIND": 13,
+    "CARD #": 9,
+    "CARDS": 9,
+    "STATE": 9,
+    "LOAD": 6,
+    "MEM": 6,
+    "CPU": 6,
+    "UP": 9,
+    "USERS": 16,
+    "AGE": 6,
+}
+
 #: The same mapping by column position in `COLUMNS`, which is what a click reports.
 #: Derived, never written by hand — see the note in `on_data_table_header_selected`.
 SORT_BY_INDEX = {list(COLUMNS).index(name): mode for name, mode in SORT_COLUMNS.items()}
@@ -261,7 +279,12 @@ class JmsTopApp(App):
     def on_mount(self) -> None:
         table = self.query_one("#table", DataTable)
         for col in COLUMNS:
-            table.add_column(_header(col), key=col)
+            # Widths are fixed here rather than left to grow with the content. A
+            # `CARD #` cell is `—` before a host is scanned and `16/16` afterwards, so
+            # content-driven sizing made the columns shift right *during* a scan —
+            # which moves every cell under the pointer, and made clicking STATE land
+            # on whatever column had slid under the cursor by then.
+            table.add_column(_header(col), key=col, width=COLUMN_WIDTHS[col])
         self.query_one("#command", Input).display = False
         self.query_one("#log", RichLog).display = False
         self._render()
@@ -305,21 +328,30 @@ class JmsTopApp(App):
             for h in self.monitor.view.hosts
             if verdict_matches(h.verdict, self.filter) and self._matches(h)
         ]
-        # Frozen while a round is in flight: arrivals must not reshuffle the table
-        # under the cursor. Between rounds every mode sorts normally, which is what
-        # brings the free machines to the top once the scan has finished.
-        stable = self.monitor.view.scanning
+        # The freeze exists so that a scan *streaming results in* does not reshuffle
+        # the table under the cursor — arrivals changing `verdict` would otherwise make
+        # rows jump every time one landed. It applies only while the ordering is the
+        # one the scan affects, i.e. the default:
+        #
+        #   * availability: frozen, because that is the order being computed from
+        #     data that is still arriving;
+        #   * address: sorting is on a field the scan never touches, so it is already
+        #     stable and freezing it would only be a no-op;
+        #   * kind and state: the *user* just asked for this order. Freezing them was
+        #     a bug — it collapsed every mode to inventory order, so clicking STATE
+        #     mid-scan changed the label in the footer and nothing else.
+        stable = self.monitor.view.scanning and self._sort_mode == "availability"
         if self._sort_mode == "address":
             return sorted(hosts, key=lambda h: _address_key(h))
         if self._sort_mode == "kind":
             # Within a model, free first: grouping should not bury the useful rows.
-            return sorted(hosts, key=lambda h: (h.family_label, h.sort_key(stable=stable)))
+            return sorted(hosts, key=lambda h: (h.family_label, h.sort_key()))
         if self._sort_mode == "state":
             # Strictly by verdict. `availability` already puts the bands in order, but
             # it also breaks ties by free-card count, so a busy host with plenty of
             # memory and one at 100% get interleaved across their band. For "show me
             # everything that is DOWN" the bands must be contiguous.
-            return sorted(hosts, key=lambda h: (h.sort_key(stable=stable)[0], h.name))
+            return sorted(hosts, key=lambda h: (h.sort_key()[0], h.name))
         return sorted(hosts, key=lambda h: h.sort_key(stable=stable))
 
     def _matches(self, host: HostView) -> bool:
@@ -428,9 +460,14 @@ class JmsTopApp(App):
         hosts = self.visible_hosts()
         names = [h.name for h in hosts]
         cursor_name = self._selected
-        if names != self._rendered_rows:
-            # Rows moved: rebuild. With a stable order only cells change, and those are
-            # updated in place — a rebuild would steal the cursor on every tick.
+        if len(names) != len(self._rendered_rows) or set(names) != set(self._rendered_rows):
+            # Only the *set* of rows forces a rebuild. A reorder is handled by writing
+            # cells into their new positions below: `clear()` + re-add leaves the table
+            # briefly inconsistent (stale row/column metadata between the two calls),
+            # and a click landing in that window is hit-tested against the old layout —
+            # clicking STATE during a scan hit MEM instead. Rebuilding on every reorder
+            # made that window appear constantly, because a scan reorders rows as
+            # results arrive.
             table.clear()
             for host in hosts:
                 table.add_row(*self._cells(host), key=host.name)
@@ -446,7 +483,11 @@ class JmsTopApp(App):
             # after every cell is written.
             for i, host in enumerate(hosts):
                 for j, cell in enumerate(self._cells(host)):
-                    table.update_cell_at((i, j), cell)
+                    # update_width=False: recomputing widths per cell is what made a
+                    # frame cost 560 ms, *and* it changes the layout under the pointer
+                    # mid-scan. Widths are set once when the columns are added.
+                    table.update_cell_at((i, j), cell, update_width=False)
+            self._rendered_rows = names
 
     def _cells(self, host: HostView) -> list[Text]:
         verdict = host.verdict
@@ -605,7 +646,12 @@ class JmsTopApp(App):
         table = self.query_one("#table", DataTable)
         table.clear(columns=True)
         for col in COLUMNS:
-            table.add_column(_header(col), key=col)
+            # Widths are fixed here rather than left to grow with the content. A
+            # `CARD #` cell is `—` before a host is scanned and `16/16` afterwards, so
+            # content-driven sizing made the columns shift right *during* a scan —
+            # which moves every cell under the pointer, and made clicking STATE land
+            # on whatever column had slid under the cursor by then.
+            table.add_column(_header(col), key=col, width=COLUMN_WIDTHS[col])
         self.query_one("#command", Input).display = False
         self.query_one("#log", RichLog).display = False
         self._rendered_rows = []
@@ -691,7 +737,19 @@ class JmsTopApp(App):
             else None
         )
         label = COLUMNS[event.column_index] if wanted else ""
-        self._sort_mode = "availability" if wanted in (None, self._sort_mode) else wanted
+        # Clicking the active column restores the default. That is fine between rounds,
+        # but during one it bites: the table is frozen to inventory order, so the first
+        # click looks like it did nothing (the rows do not move yet), the second click
+        # cancels it, and the user is left believing the header is broken. So while a
+        # round is in flight the mode only ever *advances* — it cannot be cancelled by
+        # an impatient double click. Availability is still one click away once the scan
+        # finishes.
+        if wanted is None:
+            self._sort_mode = "availability"
+        elif self.monitor.view.scanning and wanted == self._sort_mode:
+            pass  # already chosen: leave it, do not toggle off mid-scan
+        else:
+            self._sort_mode = "availability" if wanted == self._sort_mode else wanted
         self._rendered_rows = []
         self._paint_now()
         if self._sort_mode != "availability":

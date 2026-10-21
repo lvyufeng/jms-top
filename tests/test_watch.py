@@ -119,10 +119,15 @@ def test_editing_the_panels_updates_the_live_screen():
 
                 path.write_text(original.replace("cards free ", "cards HOTRELOADED ", 1))
                 app.apply_change(Change({"jms_top.panels"}, set(), False))
-                for _ in range(40):
-                    await asyncio.sleep(0.05)
+                # The rebuild runs in a worker, and a queued frame may land before or
+                # after it — wait for the *rebuild* to finish rather than sampling the
+                # screen a fixed number of times, which is what made this flaky.
+                for _ in range(200):
+                    await asyncio.sleep(0.02)
                     await pilot.pause()
-                    if "HOTRELOADED" in str(app.query_one("#titlebar").content):
+                    if not app._rebuilding and "HOTRELOADED" in str(
+                        app.query_one("#titlebar").content
+                    ):
                         break
 
                 after = str(app.query_one("#titlebar").content)
@@ -173,11 +178,15 @@ def test_reload_while_selected_keeps_the_selection():
             await pilot.pause()
 
             app.apply_change(Change({"jms_top.panels"}, set(), False))
-            for _ in range(40):
-                await asyncio.sleep(0.05)
+            # Wait for the rebuild worker rather than for the table to be non-empty:
+            # the table still holds the pre-reload rows while the swap is in flight, so
+            # "row_count > 0" is true immediately and proves nothing.
+            for _ in range(200):
+                await asyncio.sleep(0.02)
                 await pilot.pause()
-                if app.query_one("#table", DataTable).row_count:
+                if not app._rebuilding:
                     break
+            await pilot.pause()
             assert app._selected == wanted
 
     run(go())
