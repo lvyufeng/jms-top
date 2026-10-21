@@ -71,7 +71,12 @@ examples:
     p.add_argument(
         "--discover",
         action="store_true",
-        help="hosts: list the assets this account can reach (and draft an inventory)",
+        help="hosts: list every asset this account can reach (via KoKo; no token needed)",
+    )
+    p.add_argument(
+        "--discover-api",
+        action="store_true",
+        help="hosts: list assets through the REST API instead (needs `jms-top login`)",
     )
     p.add_argument(
         "--write",
@@ -312,41 +317,38 @@ async def _cmd_login(args, settings) -> int:  # noqa: ANN001
 
 async def _cmd_hosts(args, settings) -> int:  # noqa: ANN001
     from .auth import AuthError, discover_assets
-    from .config import ConfigError, write_private
-    from .inventory import Inventory, InventoryError, draft_inventory
+    from .config import ConfigError
+    from .discover import Asset as _Asset
+    from .discover import assign_keys
+    from .inventory import Inventory, InventoryError, write_inventory
 
     if args.discover:
+        return await _discover_koko(settings, write=args.write, as_json=args.json)
+    if args.discover_api:
         try:
-            assets = await discover_assets(settings)
+            api_assets = await discover_assets(settings)
         except (AuthError, ConfigError) as exc:
             print(f"jms-top: cannot list assets: {exc}", file=sys.stderr)
             return 1
+        # Reuse the KoKo naming rules so both discovery paths produce the same keys for
+        # the same machine; only the source of truth differs (API = everything you are
+        # permitted, KoKo = what you can actually log in to).
+        assets = [
+            _Asset(name=a.name, address=a.address or "", platform=a.platform or "")
+            for a in api_assets
+        ]
+        assign_keys(assets)
         if not assets:
             print("no assets visible to this account", file=sys.stderr)
             return 1
         for asset in assets:
-            accounts = ",".join(asset.accounts) or "-"
-            print(f"{asset.name:<28} {accounts:<12} {asset.id}  {asset.address or ''}")
-        print(f"\n{len(assets)} assets")
-        text = draft_inventory(
-            [
-                {
-                    "id": a.id,
-                    "name": a.name,
-                    "address": a.address,
-                    "platform": a.platform,
-                    "tags": a.tags,
-                    "account": a.accounts[0] if a.accounts else None,
-                }
-                for a in assets
-            ]
-        )
+            print(f"{asset.key:<22} {asset.address:<20} {asset.name}")
+        print(f"\n{len(assets)} assets this account may use")
         if args.write:
-            write_private(pathlib.Path(args.write).expanduser(), text)
-            print(f"drafted inventory written to {args.write}")
+            write_inventory(assets, pathlib.Path(args.write).expanduser())
+            print(f"wrote {args.write}")
         else:
-            print("\n--- draft inventory (pass --write PATH to save) ---")
-            print(text)
+            print("pass --write ~/.config/jms-top/hosts.yaml to save them")
         return 0
 
     try:
@@ -359,6 +361,72 @@ async def _cmd_hosts(args, settings) -> int:  # noqa: ANN001
         print(f"{host.name:<28} {group:<12} {host.platform:<14} {host.asset_id or '-'}")
     print(f"\n{len(inventory.hosts)} hosts from {inventory.path}")
     return 0
+
+
+async def _discover_koko(settings, *, write: str | None, as_json: bool = False) -> int:
+    """List every asset KoKo will let this account log in to.
+
+    No token, no REST: the same SSH access the poller uses, with the gateway's own
+    "show my assets" menu. Slower than the API (a page at a time) and the only option
+    available before `jms-top login`.
+    """
+    import json as _json
+
+    from .discover import DiscoverError, attach_asset_ids, discover
+    from .inventory import write_inventory
+
+    try:
+        assets = discover(settings.bastion)
+    except DiscoverError as exc:
+        print(f"jms-top: cannot read the asset list: {exc}", file=sys.stderr)
+        return 1
+    # KoKo decides *which* assets are in the inventory (it is the one that knows what
+    # can actually be logged in to); the API is only consulted for the UUIDs KoKo does
+    # not print. Without a token the inventory is still usable by name, so this is
+    # best-effort rather than required.
+    if settings.bastion.session_token:
+        try:
+            matched = attach_asset_ids(assets, await _asset_ids(settings))
+            if matched:
+                print(f"(asset ids: {matched}/{len(assets)})", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - ids are an optimisation, not a need
+            print(f"(no asset ids: {type(exc).__name__})", file=sys.stderr)
+    if not assets:
+        print("jms-top: KoKo returned no assets", file=sys.stderr)
+        return 1
+    if as_json:
+        print(
+            _json.dumps(
+                [
+                    {
+                        "key": a.key,
+                        "name": a.name,
+                        "address": a.address,
+                        "platform": a.platform,
+                        "tags": a.tags,
+                    }
+                    for a in assets
+                ],
+                indent=2,
+            )
+        )
+        return 0
+    for asset in assets:
+        print(f"{asset.key:<22} {asset.address:<20} {asset.name}")
+    print(f"\n{len(assets)} assets this account can reach")
+    if write:
+        write_inventory(assets, pathlib.Path(write).expanduser())
+        print(f"wrote {write}")
+    else:
+        print("pass --write ~/.config/jms-top/hosts.yaml to save them")
+    return 0
+
+
+async def _asset_ids(settings) -> dict[str, str]:
+    """``name -> asset UUID`` from the API, used only to fill in KoKo's blanks."""
+    from .auth import discover_assets
+
+    return {a.name.strip(): a.id for a in await discover_assets(settings)}
 
 
 async def _one_shot(args, targets: list[str]) -> int:

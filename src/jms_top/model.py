@@ -260,6 +260,9 @@ class FleetView:
     next_refresh: datetime | None = None
     paused: bool = False
     interval: float = 3.0
+    #: ``(done, total)`` while a full round is in flight, else ``None``. Shown in the
+    #: footer so a slow round over a large inventory reads as progress, not as a hang.
+    scan_progress: tuple[int, int] | None = None
     #: How often a host with free capacity gets its card tables re-read.
     full_interval: float = 6.0
     #: One line per completed round, newest last — the activity log.

@@ -92,9 +92,18 @@ If your KoKo also accepts password auth, put the password under
 is better**: register a key with JumpServer and skip that field entirely.
 
 ```bash
-jms-top hosts --discover          # assets you can reach: name, accounts, id
-jms-top hosts --discover --write  # ...and draft hosts.yaml from them
+jms-top hosts --discover          # assets you can log in to, from the gateway itself
+jms-top hosts --discover --write  # ...and write hosts.yaml from them
 ```
+
+`--discover` asks **KoKo** (the same SSH gateway the poller uses) for the assets your
+account may log in to, so it needs no token and lists exactly the machines that will
+actually answer. `--discover-api` asks the REST API instead, which returns everything
+you are *permitted*, including assets that are under repair or not yet activated — a
+superset that shows up as `DOWN`. The KoKo list is the one to use.
+
+Asset names like `bm-baai-dx-zone1-d-a100-40g-2-42` become short keys (`a100-42`) with
+the rest kept as tags and groups (`jms-top a100`, `jms-top zone1`).
 
 Check it with `jms-top --ping` (liveness only, seconds) before opening the UI.
 

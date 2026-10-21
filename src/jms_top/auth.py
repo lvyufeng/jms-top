@@ -175,14 +175,18 @@ async def discover_assets(settings: Settings, *, limit: int = 500) -> list[Asset
         response = await _request(
             settings,
             "GET",
-            "perms/users/permissions/assets/",
+            # The workbench's own "my assets" endpoint — the list the web UI shows.
+            # `perms/users/permissions/assets/` is the *admin* view and answers 404
+            # {"detail":"用户对象不存在"} for a normal account, because it expects a
+            # user object the token alone does not name.
+            "perms/users/my/assets/",
             token=token,
             params={"limit": min(100, limit - len(found)), "offset": offset},
         )
         if response.status_code >= 400:
             raise AuthError(_explain(response))
         payload = response.json()
-        rows = payload if isinstance(payload, list) else payload.get("results", [])
+        rows = payload if isinstance(payload, list) else payload.get("results", [])  # noqa: E501
         if not rows:
             break
         renamed = [_asset_from(row) for row in rows]

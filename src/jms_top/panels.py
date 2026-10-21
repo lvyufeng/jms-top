@@ -87,6 +87,12 @@ def title_bar(view: FleetView, *, paused: bool | None = None, selected: str | No
     t.append("│ ", style="dim")
     t.append(f"{view.reachable}/{len(view.hosts)} up", style="dim")
     t.append(" │ ", style="dim")
+    if view.scan_progress is not None:
+        # A serial round over a big inventory takes a while; showing how many hosts
+        # have answered turns that wait into visible progress.
+        done, total = view.scan_progress
+        t.append(f"scanning {done}/{total}…", style="bold yellow")
+        t.append(" │ ", style="dim")
     # The countdown is what tells a glance whether the view is live or wedged: a tick
     # that hangs leaves the number frozen at 0, where a "last updated 4s ago" would
     # also be true of a view that is simply paused.

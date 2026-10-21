@@ -400,3 +400,80 @@ def test_discover_maps_permission_rows_to_assets(cfgdir, fake_httpx):
     assert assets[0].platform == "cuda"
     assert assets[1].platform == "ascend"  # nested platform dict
     assert assets[0].accounts == ["root"]
+
+
+# --- discovery ----------------------------------------------------------------
+
+
+def test_koko_rows_parse_into_assets():
+    """KoKo prints fixed-width columns separated by pipes; the pipes are the contract."""
+    from jms_top.discover import announce_total, parse_page
+
+    page = """
+  ID | 名称                                            | 地址              | 平台
+-----+-------------------------------------------------+-------------------+--------
+  1  | bm-baai-dx-zone1-d-a100-40g-2-42                | 10.1.2.42         | Linux
+  1  | 229-pm-aliyun-wlcb-zonea4-d-810e-96G（ID：）    | 8.130.132.221:229 | Linux
+页码：1，每页行数：1，总页数：77，总数量：77
+"""
+    assets = parse_page(page)
+    assert [a.address for a in assets] == ["10.1.2.42", "8.130.132.221:229"]
+    # The ``（ID：）`` suffix is decoration; the raw spelling is kept for API lookups.
+    assert assets[1].name == "229-pm-aliyun-wlcb-zonea4-d-810e-96G"
+    assert "（ID：" in assets[1].raw_name
+    assert announce_total(page) == 77
+
+
+def test_asset_keys_are_short_and_unique():
+    """77 names like `bm-baai-dx-zone1-d-a100-40g-2-42` need keys a human can type."""
+    from jms_top.discover import Asset, assign_keys
+
+    assets = [
+        Asset(name="bm-baai-dx-zone1-d-a100-40g-2-42", address="10.1.2.42"),
+        Asset(name="bm-baai-dx-zone1-d-a100-40g-2-8", address="10.1.2.8"),
+        Asset(name="bm-jn-zs-zone1-910C-64G-10-108", address="10.55.0.174"),
+        Asset(name="u101-u101", address="10.31.28.101"),
+    ]
+    assign_keys(assets)
+    keys = [a.key for a in assets]
+    assert keys == ["a100-42", "a100-8", "910c-108", "u101"]
+    assert len(set(keys)) == len(keys)
+    assert "a100" in assets[0].tags and "nvidia" in assets[0].tags
+
+
+def test_duplicate_keys_get_suffixed_not_dropped():
+    from jms_top.discover import Asset, assign_keys
+
+    assets = [Asset(name="bm-x-a100-1", address="a"), Asset(name="bm-y-a100-1", address="b")]
+    assign_keys(assets)
+    assert assets[0].key != assets[1].key
+    assert assets[1].key == "a100-1-2"
+
+
+def test_asset_ids_are_matched_through_the_untidied_name():
+    """KoKo hides the UUID and tidies the name; the API keeps both. Match on either."""
+    from jms_top.discover import Asset, attach_asset_ids
+
+    assets = [
+        Asset(name="clean-name", address="a", raw_name="clean-name"),
+        Asset(name="tidied", address="b", raw_name="tidied（ID：）"),
+        Asset(name="orphan", address="c", raw_name="orphan"),
+    ]
+    matched = attach_asset_ids(assets, {"clean-name": "id-1", "tidied（ID：）": "id-2"})
+    assert matched == 2
+    assert [a.asset_id for a in assets] == ["id-1", "id-2", None]
+
+
+def test_written_inventory_carries_asset_ids(tmp_path):
+    """Without `asset_id` no login string can be built and every host reports DOWN."""
+    from jms_top.discover import Asset
+    from jms_top.inventory import Inventory, write_inventory
+
+    assets = [Asset(name="bm-x-a100-1", address="10.0.0.1", asset_id="uuid-1", key="a100-1")]
+    assets[0].tags = ["a100", "nvidia"]
+    path = tmp_path / "hosts.yaml"
+    write_inventory(assets, path)
+    text = path.read_text()
+    assert "asset_id: uuid-1" in text and "account: root" in text
+    inv = Inventory.load(path)
+    assert inv.hosts["a100-1"].login_string("me") == "me#root#uuid-1"

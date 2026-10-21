@@ -55,6 +55,11 @@ from .ssh import ExecResult, SSHRunner, failure_reason
 
 #: How many times slower a full tick runs on a host with nothing free.
 IDLE_FACTOR = 3.0
+
+#: How many hosts one full round probes at once. Low on purpose: the point is a screen
+#: that fills in visibly, not the shortest possible round — and every concurrent command
+#: holds a bastion connection the account has a limit on. Raise it for a large fleet.
+SCAN_BATCH = 4
 #: Consecutive failures after which a host is only polled every Nth round.
 BACKOFF_ROUNDS = 4
 #: Consecutive fast-tick failures that promote a host to a full tick: the cheap probe
@@ -122,6 +127,10 @@ class FleetMonitor:
         self._suspect: dict[str, int] = {}
         #: When each host last got a full tick (monotonic seconds).
         self._last_full: dict[str, float] = {}
+        #: Progress of the round in flight, for the footer. ``_scan_total`` is 0 outside
+        #: a full round.
+        self._scanned = 0
+        self._scan_total = 0
         #: Bumped whenever anything the UI shows changes; the UI diffs it instead of
         #: re-rendering on a timer.
         self.generation = 0
@@ -286,20 +295,49 @@ class FleetMonitor:
     async def _full(self, hosts: list[Host]) -> None:
         if not hosts:
             return
+        self._scanned, self._scan_total = 0, len(hosts)
+        self.view.scan_progress = (0, len(hosts))
         script = with_sentinel(
             build_script("fleet", limits=self.limits, nvidia_tile=self.nvidia_tile)
         )
-        results = await asyncio.gather(*(self._run(h, script, timeout=self.timeout) for h in hosts))
+        # Hosts go out in small batches, and the round repaints as each one answers.
+        #
+        # Pure serial is easy to watch but wastes the round: the latencies are ~1-12 s
+        # each, so 77 machines take a couple of minutes, almost all of it waiting. A
+        # full fan-out is fast but pointless to watch — nothing appears until the
+        # slowest host lands, and then everything does. Batches of `SCAN_BATCH` keep
+        # both properties: rows keep arriving in inventory order, and the round costs
+        # roughly `ceil(n / SCAN_BATCH)` slowest-host waits instead of `n` of them.
         changed = False
-        stamp = datetime.now(timezone.utc).timestamp()
-        for host, res in zip(hosts, results, strict=True):
-            view = self.view.by_name(host.name)
-            if view is None:
-                continue
-            before = _signature(view)
-            self._apply_full(host, view, res, stamp=stamp)
-            if _signature(view) != before:
-                changed = True
+        for start in range(0, len(hosts), SCAN_BATCH):
+            batch = hosts[start : start + SCAN_BATCH]
+            pending = {
+                asyncio.ensure_future(self._run(h, script, timeout=self.timeout)): h for h in batch
+            }
+            # Explicit wait/FIRST_COMPLETED rather than `as_completed`: that helper yields
+            # wrappers which (3.13+) no longer identify the future handed in, and on 3.14
+            # they are coroutines with nothing to look up. Waiting for "one is done" keeps
+            # the task -> host mapping trivially correct.
+            while pending:
+                done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    host = pending.pop(task)
+                    res = task.result()
+                    view = self.view.by_name(host.name)
+                    if view is None:
+                        continue
+                    before = _signature(view)
+                    self._apply_full(host, view, res, stamp=datetime.now(timezone.utc).timestamp())
+                    self._scanned += 1
+                    self.view.scan_progress = (self._scanned, self._scan_total)
+                    if _signature(view) != before:
+                        changed = True
+                    # Bumped per host so the TUI repaints mid-round: the app compares
+                    # generations, so one bump at the end would put every row on screen
+                    # at once — the thing this avoids.
+                    self._touch()
+        self._scan_total = 0  # round over: the footer stops showing progress
+        self.view.scan_progress = None
         if changed:
             self._touch()
 
