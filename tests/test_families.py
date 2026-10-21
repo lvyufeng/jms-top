@@ -266,3 +266,49 @@ def test_metax_default_table_still_parses():
 def test_metax_empty_output_is_an_error_not_a_free_host():
     r = FAMILIES["metax"].parse("")
     assert r.total == 0 and r.error
+
+
+# --- T-Head PPU ---------------------------------------------------------------
+
+
+def test_thead_summary_table_from_the_live_fleet():
+    """平头哥 ZW810E summary table: 16 PPUs, all idle, memory reserved at 2 MiB.
+
+    Captured from ``ppu-smi`` 1.28 on driver 1.3.2. The rows wrap onto three lines per
+    device, so a parser that reads one line per card sees nothing.
+    """
+    r = FAMILIES["thead"].parse(load("thead_zw810e_16_idle.txt"))
+    assert r.total == 16
+    assert r.free == 16
+    assert r.cards[0].name == "PPU-ZW810E"
+    assert r.cards[0].temp == pytest.approx(33)
+    assert r.cards[0].power == pytest.approx(82)
+    assert r.cards[0].mem_total == pytest.approx(97920)
+    assert r.cards[0].mem_used == pytest.approx(2)
+    assert r.cards[0].util == 0.0
+
+
+def test_thead_is_probed_from_the_sdk_path():
+    """The SDK does not put `ppu-smi` on PATH — 16 PPUs were present and 0 tools found."""
+    from jms_top.probe import build_script
+
+    script = build_script("fleet")
+    assert "/usr/local/PPU_SDK/ppu-smi/bin/ppu-smi" in script
+    # Falls back to the SDK path only after `command -v` came up empty.
+    assert script.index("command -v ppu-smi") < script.index("/usr/local/PPU_SDK")
+
+
+def test_every_vendor_stall_marker_names_its_own_family():
+    """A copy-pasted snippet once made every vendor report `STALLED:ascend`.
+
+    The marker is what the UI reads to say *which* tool went quiet, so a mislabelled
+    one sends you to the wrong driver.
+    """
+    import re
+
+    from jms_top.probe import ACCEL_SNIPPETS
+
+    for family, template in ACCEL_SNIPPETS.items():
+        labels = re.findall(r"##STALLED:([a-z]+):", template)
+        assert labels, f"{family} snippet has no stall marker"
+        assert set(labels) == {family}, f"{family} snippet is labelled {labels}"

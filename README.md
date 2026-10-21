@@ -246,8 +246,8 @@ Three rules shape all of this:
 | MetaX (沐曦) | `mx-smi` | GPU | yes — `--show-memory/usage/process`, falls back to the default table |
 | Enflame | `efsmi` + `pmon` | GCU | yes |
 | Moore Threads | `mthreads-gmi` | GPU | yes |
-| TsingMicro | `tsm_smi` | chip (4/card on TX8110) | card-level |
-| T-Head PPU | `ppu-smi` | PPU | parser written, no live sample yet |
+| TsingMicro | `tsm_smi` | chip (4/card on TX8110) | card-level; process table per card |
+| T-Head PPU | `ppu-smi` | PPU | yes — installed under `/usr/local/PPU_SDK/ppu-smi/bin`, not on `PATH` |
 | Iluvatar | `ixsmi` | GPU | parser written, no live sample yet |
 | Hygon DCU | `hy-smi` | — | not parsed yet; the CPU side still works |
 

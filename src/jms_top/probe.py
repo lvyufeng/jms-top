@@ -120,7 +120,7 @@ _ASCEND = (
 _KUNLUNXIN = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "if command -v xpu-smi >/dev/null 2>&1; then echo '##KUNLUNXIN'; "
-    "out=$($T xpu-smi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:ascend:6s' || "
+    "out=$($T xpu-smi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:kunlunxin:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; fi"
 )
 #: MetaX（沐曦）曦云 C550/N260: ``/opt/mxdriver/bin/mx-smi`` with ``/usr/bin/mx-smi``
@@ -142,6 +142,10 @@ _METAX = (
     'u=$($T "$M" --show-usage 2>/dev/null); '
     'm=$($T "$M" --show-memory 2>/dev/null); '
     "p=$($T \"$M\" --show-process 2>/dev/null | sed -n '/Process:/,/End of Log/p'); "
+    # Three queries, so "did it answer" cannot be one command's exit status: if the
+    # memory query produced nothing the driver did not answer at all, and saying so is
+    # what keeps the host UNKNOWN instead of quietly empty.
+    "[ -n \"$m\" ] || { echo '##STALLED:metax:6s'; exit 0; }; "
     "if printf '%s' \"$m\" \"$u\" | grep -q 'GPU#'; then echo '##METAX-WIDE'; "
     "printf '%s\\n' \"$m\" | head -{half}; "
     "printf '%s\\n' \"$u\" | head -{half}; "
@@ -151,32 +155,44 @@ _METAX = (
 _ENFLAME = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "if command -v efsmi >/dev/null 2>&1; then echo '##ENFLAME'; "
-    "out=$($T efsmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:ascend:6s' || "
+    "out=$($T efsmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:enflame:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; "
     "$T efsmi pmon -c 1 2>/dev/null | head -{half}; fi"
 )
 _MTHREADS = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "if command -v mthreads-gmi >/dev/null 2>&1; then echo '##MTHREADS'; "
-    "out=$($T mthreads-gmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:ascend:6s' || "
+    "out=$($T mthreads-gmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:mthreads:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; fi"
 )
 _TSINGMICRO = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "if command -v tsm_smi >/dev/null 2>&1; then echo '##TSINGMICRO'; "
-    "out=$($T tsm_smi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:ascend:6s' || "
+    "out=$($T tsm_smi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:tsingmicro:6s' || "
     "printf '%s\\n' \"$out\" | grep -v 'exceeds max' | head -{tile_n}; fi"
 )
+#: 平头哥 PPU (T-Head ZW810E). The SDK installs ``ppu-smi`` under
+#: ``/usr/local/PPU_SDK/ppu-smi/bin/`` and does **not** put it on ``PATH`` — measured on
+#: the live fleet, where 16 PPUs were present and ``command -v ppu-smi`` found nothing.
+#: Both locations are tried.
+#:
+#: The bare summary table is used rather than ``-q``: ``-q`` wants an explicit device
+#: list, and combines -d ... -c into "Invalid combination of input arguments" on driver
+#: 1.3.2. The summary prints name, bus id, temperature, power, memory and utilisation
+#: for every device in one fixed-width table, which is exactly what the parser reads.
 _THEAD = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
-    "if command -v ppu-smi >/dev/null 2>&1; then echo '##THEAD'; "
-    "out=$($T ppu-smi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:ascend:6s' || "
+    "P=$(command -v ppu-smi 2>/dev/null); "
+    '[ -n "$P" ] || { [ -x /usr/local/PPU_SDK/ppu-smi/bin/ppu-smi ] '
+    "&& P=/usr/local/PPU_SDK/ppu-smi/bin/ppu-smi; }; "
+    "if [ -n \"$P\" ]; then echo '##THEAD'; "
+    "out=$($T \"$P\" 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:thead:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; fi"
 )
 _ILUVATAR = (
     "T=timeout 6; command -v timeout >/dev/null 2>&1 || T=; "
     "if command -v ixsmi >/dev/null 2>&1; then echo '##ILUVATAR'; "
-    "out=$($T ixsmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:ascend:6s' || "
+    "out=$($T ixsmi 2>/dev/null); [ $? -eq 124 ] && echo '##STALLED:iluvatar:6s' || "
     "printf '%s\\n' \"$out\" | head -{tile_n}; "
     "elif [ -x /usr/local/corex/bin/ixsmi ]; then echo '##ILUVATAR'; "
     "LD_LIBRARY_PATH=/usr/local/corex/lib:$LD_LIBRARY_PATH "
