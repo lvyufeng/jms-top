@@ -52,8 +52,8 @@ examples:
     p.add_argument(
         "command",
         nargs="?",
-        choices=["init", "login", "logout", "hosts"],
-        help="set-up verbs: init / login / logout / hosts (omit to open the TUI)",
+        choices=["init", "login", "logout", "hosts", "advise"],
+        help="set-up verbs: init / login / logout / hosts / advise (omit to open the TUI)",
     )
     p.add_argument("hosts", nargs="*", help="host names / groups / tags (default: all)")
 
@@ -103,6 +103,23 @@ examples:
     p.add_argument("--ping", action="store_true", help="liveness check only")
     p.add_argument("--demo", action="store_true", help="replay the recorded fleet (no SSH)")
     p.add_argument("--no-color", action="store_true", help="disable ANSI colour in text output")
+    # --- `advise` options ---
+    p.add_argument(
+        "--no-ai",
+        action="store_true",
+        help="advise: skip the model and show the local ranking only",
+    )
+    p.add_argument(
+        "--shared",
+        action="store_true",
+        help="advise: treat the job as shareable with a neighbour, not exclusive",
+    )
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="advise: also list the hosts that were rejected, and why",
+    )
     p.add_argument(
         "--watch",
         action="store_true",
@@ -144,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return _cmd_init(args)
-    if args.command in {"login", "logout", "hosts"}:
+    if args.command in {"login", "logout", "hosts", "advise"}:
+        # Dispatched before `hosts` is read as selectors: for `advise` the positionals
+        # are the task description ("4 卡分布式训练"), not host names.
         return asyncio.run(_cmd_auth(args))
     # `jms-top metax,ascend` reads as two selectors to anyone who has used a shell, so
     # commas split — the same rule an inventory selector already follows.
@@ -265,7 +284,129 @@ async def _cmd_auth(args) -> int:  # noqa: ANN001 - argparse.Namespace
         return _cmd_logout(args)
     if args.command == "hosts":
         return await _cmd_hosts(args, settings)
+    if args.command == "advise":
+        return await _cmd_advise(args, settings)
     return await _cmd_login(args, settings)
+
+
+async def _cmd_advise(args, settings) -> int:  # noqa: ANN001
+    """Recommend machines for a described task. Never submits anything."""
+    from .advise import advise, parse_task
+    from .ai import explain
+    from .monitor import FleetMonitor, MonitorError
+    from .ssh import require_ssh
+
+    # `hosts` is the positional list, and for `advise` it is the *task description*.
+    # A selector passed with -t narrows the fleet; without one, everything is searched.
+    text = " ".join(args.hosts) if args.hosts else ""
+    if not text:
+        print('jms-top: describe the task, e.g. jms-top advise "8 卡 A100 微调"', file=sys.stderr)
+        return 2
+
+    require_ssh()
+    want = parse_task(text)
+    if want.exclusive is None:
+        # Not inferable from the wording. Exclusive is the safe default: mistaking a
+        # parallel job for a scratch run puts it on a noisy node, while the reverse
+        # only leaves out candidates.
+        want.exclusive = True
+        if not args.json:
+            print("jms-top: 未说明是独占还是共享，按“独占”处理（--shared 可改）", file=sys.stderr)
+    if args.shared:
+        want.exclusive = False
+
+    try:
+        monitor = FleetMonitor(
+            targets=args.target or None,
+            interval=args.interval,
+            full_interval=args.full_interval,
+            timeout=args.timeout,
+        )
+    except MonitorError as exc:
+        print(f"jms-top: {exc}", file=sys.stderr)
+        return 2
+
+    result = None
+    try:
+        await monitor.ping_all()
+        await monitor.poll()
+        result = advise(monitor.view.hosts, want)
+        if args.json:
+            print(json.dumps(_advice_json(result), ensure_ascii=False, indent=2))
+            return 0 if result.candidates else 1
+        _print_advice(result, verbose=args.verbose)
+        if result.candidates and not args.no_ai and settings.ai.enabled:
+            line = explain(
+                result,
+                base_url=settings.ai.base_url,
+                api_key=settings.ai.api_key,
+                model=settings.ai.model,
+                timeout=settings.ai.timeout,
+            )
+            if line.ok:
+                print("\nAI:")
+                for row in line.text.splitlines():
+                    print(f"  {row}")
+    finally:
+        await monitor.close()
+    return 0 if (result and result.candidates) else 1
+
+
+def _advice_json(result) -> dict:  # noqa: ANN001
+    return {
+        "task": result.want.note,
+        "mode": "exclusive" if result.want.exclusive else "shared",
+        "needs": {
+            "cards": result.want.cards,
+            "min_mem_gib": result.want.min_mem_gib,
+            "family": result.want.family,
+            "hours": result.want.hours,
+        },
+        "candidates": [
+            {
+                "host": c.name,
+                "score": c.score,
+                "model": c.host.card_name,
+                "free_cards": c.free_cards,
+                "total_cards": c.total_cards,
+                "vram_per_card_gib": c.per_card_gib,
+                "reasons": c.reasons,
+            }
+            for c in result.candidates
+        ],
+        "rejected": [{"host": r.host, "reason": r.reason} for r in result.rejected],
+    }
+
+
+def _print_advice(result, *, verbose: bool) -> None:  # noqa: ANN001
+    want = result.want
+    mode = "独占" if want.exclusive else "共享"
+    need = want.cards or 1
+    extras = []
+    if want.min_mem_gib:
+        extras.append(f"显存 ≥ {want.min_mem_gib:.0f}G")
+    if want.family:
+        extras.append(f"型号 {want.family}")
+    if want.hours:
+        extras.append(f"{want.hours:g} 小时")
+    print(f"任务：{want.note}")
+    print(f"需求：{need} 卡（{mode}）" + ("，".join(["", *extras]) if extras else ""))
+    print()
+    if not result.candidates:
+        print(f"没有可用机器：{result.shortfall()}")
+        if verbose:
+            for r in result.rejected[:15]:
+                print(f"  {r.host:20s} {r.reason}")
+        return
+    print(f"{'HOST':20s} {'SCORE':>6s}  {'CARDS':>7s}  VRAM  理由")
+    for c in result.candidates:
+        vram = f"{c.per_card_gib:.0f}G" if c.per_card_gib else "—"
+        cards = f"{c.free_cards}/{c.total_cards}"
+        print(f"{c.name:20s} {c.score:6.1f}  {cards:>7s}  {vram:5s} {' / '.join(c.reasons)}")
+    if verbose:
+        print()
+        for r in result.rejected:
+            print(f"  排除 {r.host:18s} {r.reason}")
 
 
 def _cmd_logout(args) -> int:  # noqa: ANN001

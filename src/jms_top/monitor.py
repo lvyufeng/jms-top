@@ -164,6 +164,34 @@ class FleetMonitor:
             group=self.groups.get(host.name),
         )
 
+    async def proc_detail(self, names: list[str]) -> None:
+        """Fetch command lines for the processes on the named hosts, in place.
+
+        A second, cheap round trip issued only when an answer needs to *name* a
+        process rather than point at a pid — see :mod:`jms_top.notify`. The vendor
+        tools report `python3` and a pid; asking someone to give up a card on that
+        basis is asking them to stop something they cannot identify.
+
+        Best-effort: a host that fails here keeps the pid-only view, and the message
+        degrades to what is known instead of failing to compose.
+        """
+        from .probe import proc_detail_script
+        from .scan import apply_proc_detail, parse_proc_detail, split_sections
+
+        for name in names:
+            view = self.view.by_name(name)
+            inv = next((h for h in self.hosts if h.name == name), None)
+            if view is None or inv is None or view.accel is None:
+                continue
+            pids = sorted({p.pid for c in view.accel.cards for p in c.procs if p.pid is not None})
+            if not pids:
+                continue
+            result = await self._run(inv, proc_detail_script(pids), timeout=self.timeout)
+            if isinstance(result, Exception):
+                continue
+            detail = parse_proc_detail(split_sections(result.stdout).get("PROCDETAIL", []))
+            apply_proc_detail(view, detail)
+
     def log(self, line: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         entry = f"{stamp}  {line}"

@@ -57,9 +57,24 @@ class Proc:
     user: str | None
     name: str
     mem_mib: float | None = None
+    #: Full command line, from a follow-up `/proc/<pid>/cmdline` read. The vendor tools
+    #: report only an executable name, which is not enough to identify a task when
+    #: asking someone to give up a card.
+    cmdline: str | None = None
+    #: Wall-clock run time as the kernel prints it (`17:37:36`, `2-03:11`). Not
+    #: normalised to seconds: it is shown, not computed with, and the original form is
+    #: what a person reads fastest.
+    elapsed: str | None = None
 
     def to_dict(self) -> dict:
-        return {"pid": self.pid, "user": self.user, "name": self.name, "mem_mib": self.mem_mib}
+        return {
+            "pid": self.pid,
+            "user": self.user,
+            "name": self.name,
+            "mem_mib": self.mem_mib,
+            "cmdline": self.cmdline,
+            "elapsed": self.elapsed,
+        }
 
 
 @dataclass

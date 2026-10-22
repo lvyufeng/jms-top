@@ -283,3 +283,41 @@ def reached(text: str) -> bool:
         if line.strip() == SENTINEL:
             return True
     return False
+
+
+def parse_proc_detail(lines: list[str]) -> dict[int, dict[str, str | None]]:
+    """``##PROCDETAIL`` -> ``{pid: {user, elapsed, cmdline}}``.
+
+    A follow-up section (see :func:`jms_top.probe.proc_detail_script`) that runs only
+    when an answer needs to name a process rather than point at a pid. Absent on a
+    normal tick, so this is not on the hot path.
+    """
+    out: dict[int, dict[str, str | None]] = {}
+    for line in lines:
+        parts = line.split("|", 3)
+        if len(parts) != 4 or not parts[0].strip().isdigit():
+            continue
+        pid = int(parts[0])
+        out[pid] = {
+            "user": parts[1].strip() or None,
+            "elapsed": parts[2].strip() or None,
+            "cmdline": parts[3].strip() or None,
+        }
+    return out
+
+
+def apply_proc_detail(view, detail: dict[int, dict[str, str | None]]) -> None:  # noqa: ANN001
+    """Fill ``Proc.user``/``elapsed``/``cmdline`` from a detail reply, in place."""
+    if not detail or view.accel is None:
+        return
+    for card in view.accel.cards:
+        for proc in card.procs:
+            info = detail.get(proc.pid) if proc.pid is not None else None
+            if not info:
+                continue
+            if info.get("user"):
+                proc.user = info["user"]
+            if info.get("elapsed"):
+                proc.elapsed = info["elapsed"]
+            if info.get("cmdline"):
+                proc.cmdline = info["cmdline"]

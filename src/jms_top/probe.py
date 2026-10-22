@@ -62,6 +62,7 @@ M_WHO = "##WHO"
 M_TOP = "##TOP"
 M_DISK = "##DISK"
 M_STALLED = "##STALLED"
+M_PROCS = "##PROCDETAIL"
 
 #: The node section. ``##CPU`` and ``##SYS`` carry the *same* layout on purpose: the
 #: cheap tick replaces the node stats, so a field missing from it would blink between a
@@ -300,6 +301,47 @@ def _fill(template: str, lim: ProbeLimits) -> str:
         .replace("{tile_n}", str(lim.tile_n))
         .replace("{half}", str(lim.half))
     )
+
+
+#: Detail for the pids the vendor tools named, and only those.
+#:
+#: The vendor tables give a pid and a bare executable (`python3`), which is not enough
+#: to ask someone to give up a card — in a negotiation message "pid 2882417" is
+#: anonymous, whereas "root, running 17h37m, `train.py --tag …`" is recognisable.
+#:
+#: This does **not** re-run the vendor tools. Every command above has already answered;
+#: re-running them would double the cost of a round, which is the one budget that
+#: matters here. Instead the pids are recovered from what the GPU tools are *known to
+#: read anyway*: `/proc` entries with a CUDA/NPU queue. Where a platform exposes that
+#: (nvidia via /proc/<pid>/fd on the device node, everything else via the vendor's own
+#: process list already in the reply) the host-side grep of four-to-seven digit numbers
+#: is deliberately loose — a false positive costs one empty `ps` lookup, while a false
+#: negative costs an unexplained process.
+_PROC_DETAIL = (
+    "echo '##PROCDETAIL'; "
+    "for pid in ${JMS_PIDS:-}; do "
+    '[ -d "/proc/$pid" ] || continue; '
+    "cmd=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\" 2>/dev/null | cut -c1-120); "
+    '[ -n "$cmd" ] || continue; '
+    "user=$(ps -o user= -p \"$pid\" 2>/dev/null | tr -d ' '); "
+    "el=$(ps -o etime= -p \"$pid\" 2>/dev/null | tr -d ' '); "
+    'echo "$pid|$user|$el|$cmd"; '
+    "done"
+)
+
+
+def proc_detail_script(pids: list[int]) -> str:
+    """A follow-up probe for the given pids — one round trip, no vendor tools.
+
+    Separate from :func:`build_script` on purpose: the pids are only known *after* a
+    reply has been parsed, so fetching their detail is a second, much cheaper call.
+    :class:`~jms_top.monitor.FleetMonitor` issues it when the advisor asks for it, not
+    on every tick.
+    """
+    if not pids:
+        return "echo '##PROCDETAIL'\n"
+    joined = " ".join(str(p) for p in pids[:40])
+    return f"JMS_PIDS='{joined}'\n" + _PROC_DETAIL + "\n"
 
 
 def build_script(

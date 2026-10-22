@@ -150,6 +150,39 @@ class Bastion:
 
 
 @dataclass
+class Ai:
+    """An OpenAI-compatible endpoint used only to *explain* a recommendation.
+
+    The model never sees the fleet and never does arithmetic — see
+    :mod:`jms_top.advise`. Absent configuration is a supported state: the advisor is
+    fully functional without it, just terser.
+    """
+
+    base_url: str = ""
+    api_key: str = ""
+    model: str = "gpt-4o-mini"
+    timeout: float = 20.0
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.base_url and self.api_key)
+
+
+@dataclass
+class FeishuGroup:
+    """One room you can send a negotiation message to.
+
+    Groups are chosen at send time. Nothing maps a host to a room automatically: the
+    right room for `a100-42` is a judgement about who is affected, not something that
+    can be read off the machine.
+    """
+
+    name: str
+    webhook: str
+    secret: str = ""
+
+
+@dataclass
 class Settings:
     """Everything loaded from ``config.toml`` plus the credentials file."""
 
@@ -157,6 +190,8 @@ class Settings:
     #: Where each file was actually read from, so messages can point at it.
     config_file: Path
     inventory_file: Path = field(default_factory=inventory_path)
+    ai: Ai = field(default_factory=Ai)
+    groups: list[FeishuGroup] = field(default_factory=list)
 
 
 def load_settings(*, require_url: bool = True) -> Settings:
@@ -189,6 +224,15 @@ def load_settings(*, require_url: bool = True) -> Settings:
         password = _saved_password()
 
     key = _env("JMS_TOP_SSH_KEY") or section.get("ssh_key")
+    ai_section = data.get("ai", {}) if isinstance(data, dict) else {}
+    if not isinstance(ai_section, dict):
+        raise ConfigError(f"{path}: [ai] must be a table")
+    ai = Ai(
+        base_url=str(_env("JMS_TOP_AI_URL") or ai_section.get("base_url", "")).rstrip("/"),
+        api_key=str(_env("JMS_TOP_AI_KEY") or ai_section.get("api_key", "")),
+        model=str(_env("JMS_TOP_AI_MODEL") or ai_section.get("model", "gpt-4o-mini")),
+        timeout=float(ai_section.get("timeout", 20.0)),
+    )
     return Settings(
         bastion=Bastion(
             url=str(url).rstrip("/"),
@@ -203,6 +247,8 @@ def load_settings(*, require_url: bool = True) -> Settings:
             api_timeout=float(section.get("api_timeout", 30.0)),
         ),
         config_file=path,
+        ai=ai,
+        groups=_groups(data, path),
     )
 
 
@@ -358,3 +404,25 @@ def is_private(path: Path) -> bool:
     except FileNotFoundError:
         return False
     return not (mode & (stat.S_IRWXG | stat.S_IRWXO))
+
+
+def _groups(data: object, path: Path) -> list[FeishuGroup]:
+    """``[[notify.feishu.groups]]`` -> groups. Missing means "none configured"."""
+    try:
+        raw = data["notify"]["feishu"]["groups"]  # type: ignore[index]
+    except (KeyError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError(f"{path}: notify.feishu.groups must be an array of tables")
+    out: list[FeishuGroup] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("webhook"):
+            raise ConfigError(f"{path}: every notify.feishu.groups entry needs a webhook")
+        out.append(
+            FeishuGroup(
+                name=str(item.get("name") or "未命名群"),
+                webhook=str(item["webhook"]),
+                secret=str(item.get("secret", "")),
+            )
+        )
+    return out
