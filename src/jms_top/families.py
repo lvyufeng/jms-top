@@ -201,18 +201,30 @@ class AccelResult:
 # --- small parsing helpers ----------------------------------------------------
 
 
+#: A vendor's way of saying "no value". Anchored, so a field that merely *contains*
+#: `N/A` is still parsed normally where it does carry a number.
+_NOT_A_NUMBER = re.compile(r"\s*\(?-?\s*(N/A|NA|Disabled|None|\[\])\s*\)?\s*")
+_FIRST_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+
+
 def _num(text: str | None) -> float | None:
-    """First number in ``text``; ``N/A`` / ``-`` / ``Disabled`` yield ``None``."""
+    """First number in ``text``; ``N/A`` / ``-`` / ``Disabled`` yield ``None``.
+
+    Every numeric field of every card goes through here, so the two patterns are
+    compiled once at import rather than per call — `re.search` memoises compiled
+    patterns, but the lookup is still measurable at this call rate.
+    """
     if not text:
         return None
-    if re.fullmatch(r"\s*\(?-?\s*(N/A|NA|Disabled|None|\[\])\s*\)?\s*", text):
+    if _NOT_A_NUMBER.fullmatch(text):
         return None
-    m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
+    m = _FIRST_NUMBER.search(text.replace(",", ""))
     return float(m.group(0)) if m else None
 
 
 def _pct(text: str | None) -> float | None:
-    m = re.search(r"(\d+(?:\.\d+)?)\s*%", text or "")
+    m = _PERCENT.search(text or "")
     return float(m.group(1)) if m else None
 
 

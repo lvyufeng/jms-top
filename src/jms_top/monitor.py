@@ -435,8 +435,12 @@ class FleetMonitor:
             self._current.cancel()
             try:
                 await self._current
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+            except asyncio.CancelledError:
+                pass  # expected: this is how the loop is asked to stop
+            except Exception as exc:  # noqa: BLE001 - a crash here is already reported
+                # The loop logs and survives its own errors, so reaching this means it
+                # died while shutting down. Recorded rather than silently dropped.
+                self.log(f"poll loop stopped with an error: {exc}")
             self._current = None
 
     def pause(self) -> None:

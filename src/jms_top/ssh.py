@@ -229,8 +229,7 @@ class SSHRunner:
 
     async def exec_on(self, host: Host, script: str, *, timeout: float = 60.0) -> ExecResult:
         """Run ``script`` on ``host``; never raises for a far-side failure."""
-        if shutil.which("ssh") is None:
-            raise ConfigError("`ssh` is not installed — install an OpenSSH client")
+        require_ssh()
         argv = self.argv(host)
         async with self._sem:
             proc = await asyncio.create_subprocess_exec(

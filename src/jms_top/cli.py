@@ -173,6 +173,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from .monitor import FleetMonitor, MonitorError
 
+    # Fail before the first poll, not on it: without an ssh client every host would
+    # come back DOWN with a confusing message, and the real cause — nothing to run —
+    # would be buried under 77 of them.
+    from .ssh import require_ssh
+
+    require_ssh()
+
     if args.once or args.json or args.ping:
         return asyncio.run(_one_shot(args, targets))
 

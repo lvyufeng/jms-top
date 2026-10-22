@@ -926,10 +926,6 @@ class JmsTopApp(App):
         self.query_one("#table", DataTable).action_cursor_up()
 
 
-def run_tui(monitor: FleetMonitor, *, demo: bool = False) -> None:
-    JmsTopApp(monitor, demo=demo).run()
-
-
 async def screenshot(monitor: FleetMonitor, path: str, *, demo: bool = False) -> None:
     """Render one frame of the real app to ``path`` — how the docs get their pictures.
 

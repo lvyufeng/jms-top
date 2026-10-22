@@ -19,18 +19,6 @@ def fmt_pct(value: float | None, width: int = 5) -> str:
     return DASH.rjust(width) if value is None else f"{value:.0f}%".rjust(width)
 
 
-def fmt_gib(mib: float | None) -> str:
-    if mib is None:
-        return DASH
-    return f"{mib / 1024:.0f}G"
-
-
-def fmt_mib_pair(used: float | None, total: float | None) -> str:
-    if used is None or total is None:
-        return DASH
-    return f"{used / 1024:.0f}/{total / 1024:.0f}G"
-
-
 def fmt_uptime(seconds: float | None) -> str:
     if seconds is None:
         return DASH

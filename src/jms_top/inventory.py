@@ -30,7 +30,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import ConfigError, inventory_path
+from .config import inventory_path
 
 
 class InventoryError(RuntimeError):
@@ -244,13 +244,6 @@ def _slug(name: str, *, taken: set[str]) -> str:
         candidate = f"{base}-{n}"
         n += 1
     return candidate
-
-
-def require_dashboard_url(settings) -> str:  # noqa: ANN001 - Settings, avoids a cycle
-    """The bastion URL, or a config error naming where to set it."""
-    if not settings.bastion.url:
-        raise ConfigError(f"no bastion URL in {settings.config_file}")
-    return settings.bastion.url
 
 
 def write_inventory(assets, path: Path) -> None:  # noqa: ANN001 - discover.Asset
