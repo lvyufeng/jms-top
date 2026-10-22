@@ -13,7 +13,7 @@ import pytest
 from textual.widgets import DataTable
 
 from jms_top.demo import demo_monitor
-from jms_top.tui import FILTERS, JmsTopApp, verdict_matches
+from jms_top.tui import FILTERS, JmsTopApp, screenshot, verdict_matches
 
 
 def run(coro):  # noqa: ANN001, ANN201
@@ -564,3 +564,42 @@ def test_selection_survives_a_reorder():
     assert selected == picked, "the selection followed the row instead of the host"
     assert row_name == picked, "the cursor did not follow the selected host"
     assert shown == picked
+
+
+def test_screenshot_is_coloured_even_when_the_environment_says_otherwise():
+    """`docs/fleet.svg` must not inherit the shell's colour preferences.
+
+    `App.__init__` reads `NO_COLOR` once into `app.no_color` and renders every frame
+    through it, so generating the picture from a shell that exports `NO_COLOR=1` — as
+    the machine this repo was developed on does — produced a grey-on-grey SVG that
+    looked like the app had no colours at all. `export_screenshot`'s own
+    `force_terminal=True` cannot undo that; the decision was taken a layer up.
+    """
+    import os
+    import re
+    import tempfile
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+    saved = {k: os.environ.get(k) for k in ("NO_COLOR", "TERM")}
+    os.environ["NO_COLOR"] = "1"
+    os.environ["TERM"] = "dumb"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/shot.svg"
+            run(screenshot(monitor, path, demo=True))
+            svg = open(path, encoding="utf-8").read()
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def grey(colour: str) -> bool:
+        r, g, b = (int(colour[i : i + 2], 16) for i in (1, 3, 5))
+        return abs(r - g) < 12 and abs(g - b) < 12
+
+    colours = {c for c in re.findall(r"fill:\s*(#[0-9a-fA-F]{6})", svg) if not grey(c)}
+    assert colours, "the screenshot has no colour at all"
+    # The verdict palette has to survive: free is green, busy red.
+    assert "#98e024" in svg, "FREE rows lost their green"

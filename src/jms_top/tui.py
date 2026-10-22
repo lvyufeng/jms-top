@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timezone
+from os import environ
 from pathlib import Path
 
 from rich.text import Text
@@ -936,13 +937,29 @@ async def screenshot(monitor: FleetMonitor, path: str, *, demo: bool = False) ->
     exports Textual's own SVG, so the image is what the terminal would show, not a
     re-drawing of it.
     """
-    app = JmsTopApp(monitor, demo=demo, boot=False)
-    async with app.run_test(size=(170, 44)) as pilot:
-        await monitor.ping_all()
-        await monitor.poll()
-        app._rendered_rows = []
-        app._rendered_generation = -1
-        app._render()
-        await pilot.pause()
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(app.export_screenshot())
+    # The docs' picture must not depend on the environment that produced them.
+    # `App.__init__` reads `NO_COLOR` once into `self.no_color` and renders every frame
+    # through it, so a shell (or a CI runner) exporting `NO_COLOR=1` — as this one does
+    # — yields a grey-on-grey screenshot that looks like the app has no colours at all.
+    # `export_screenshot`'s own `force_terminal=True` cannot undo that: the decision was
+    # already taken one layer up. Cleared here, restored after.
+    saved = {k: environ.pop(k, None) for k in ("NO_COLOR", "FORCE_COLOR")}
+    if environ.get("TERM") in (None, "dumb"):
+        environ["TERM"] = "xterm-256color"
+    try:
+        app = JmsTopApp(monitor, demo=demo, boot=False)
+        async with app.run_test(size=(170, 44)) as pilot:
+            await monitor.ping_all()
+            await monitor.poll()
+            app._rendered_rows = []
+            app._rendered_generation = -1
+            app._render()
+            await pilot.pause()
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(app.export_screenshot())
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                environ.pop(key, None)
+            else:
+                environ[key] = value
