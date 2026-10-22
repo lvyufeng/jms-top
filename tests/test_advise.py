@@ -204,3 +204,14 @@ def test_a_rejected_host_never_appears_in_the_ranking():
     result = advise(hosts, Want(cards=6))
     assert [c.name for c in result.candidates] == ["big"]
     assert any(r.host == "tiny" for r in result.rejected)
+
+
+def test_the_scope_word_decides_not_the_verb():
+    """`跑个大任务` and `跑个脚本` share a verb and mean opposite things.
+
+    A bare `跑个` hint read both as scratch runs, which for the first one is exactly
+    backwards: it would send a real job to a noisy shared node.
+    """
+    assert parse_task("跑个大任务").exclusive is True
+    assert parse_task("跑个脚本试试").exclusive is False
+    assert parse_task("长时间训练").exclusive is True

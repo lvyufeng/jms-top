@@ -267,6 +267,8 @@ class JmsTopApp(App):
         Binding("space", "toggle_pause", "pause"),
         Binding("i", "slower", "interval+"),
         Binding("o", "faster", "interval-"),
+        Binding("a", "ask", "ask", show=False),
+        Binding("n", "negotiate", "negotiate", show=False),
         Binding("u", "cycle_sort", "sort", show=False),
         Binding("l", "toggle_log", "log", show=False),
         Binding("ctrl+r", "reload", "reload", show=False),
@@ -312,6 +314,13 @@ class JmsTopApp(App):
         #: set, `RowHighlighted` events are ignored — they arrive asynchronously, one
         #: per row the cursor passes, so a flag cleared after the call is too early.
         self._pending_cursor: str | None = None
+        #: What the command bar means right now: "search" filters the table, "ask" is a
+        #: task description for the advisor.
+        self._command_mode = "search"
+        self._task_text = ""
+        self._advice = None
+        self._draft = None
+        self._draft_text = ""
 
     # --- composition -----------------------------------------------------------
 
@@ -518,12 +527,16 @@ class JmsTopApp(App):
         self.query_one("#cards", Static).update(
             Text("") if self._detail_mode else panels.cards_panel(selected)
         )
-        self.query_one("#detail", Static).update(
-            self._process_table(selected) if self._detail_mode else panels.detail_view(selected)
-        )
-        self.query_one("#side-title", Static).update(
-            "PROCESSES  (esc)" if self._detail_mode else "CARDS"
-        )
+        if self._draft_text:
+            body, title = Text(self._draft_text), "MESSAGE  (n 重生成 · esc)"
+        elif self._detail_mode and self._advice is not None:
+            body, title = panels.advice_view(self._advice), "ADVICE  (esc)"
+        elif self._detail_mode:
+            body, title = self._process_table(selected), "PROCESSES  (esc)"
+        else:
+            body, title = panels.detail_view(selected), "CARDS"
+        self.query_one("#detail", Static).update(body)
+        self.query_one("#side-title", Static).update(title)
         self._render_footer(view)
 
     def _title(self, view: FleetView) -> Text:
@@ -704,7 +717,30 @@ class JmsTopApp(App):
         self.query_one("#titlebar", Static).update(self._title(self.monitor.view))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if self._command_mode == "ask":
+            self._task_text = event.value.strip()
+            self._command_mode = "search"
+            self._hide_command()
+            self._run_advice(self._task_text)
+            return
         self._hide_command()
+
+    def _run_advice(self, text: str) -> None:
+        """Rank the fleet for ``text`` and show it in the side panel. No network."""
+        from .advise import advise, parse_task
+
+        if not text:
+            self._advice = None
+            self._paint_now()
+            return
+        want = parse_task(text)
+        if want.exclusive is None:
+            # Not stated. Exclusive is the safe reading: a parallel job on a noisy node
+            # loses throughput, whereas the reverse only drops some candidates.
+            want.exclusive = True
+        self._advice = advise(self.monitor.view.hosts, want)
+        self._detail_mode = True
+        self._paint_now()
 
     # --- live reload -----------------------------------------------------------
 
@@ -815,9 +851,66 @@ class JmsTopApp(App):
         board.value = self.needle
         self.set_focus(board)
 
+    def action_ask(self) -> None:
+        """Describe a task; the side panel shows what would fit.
+
+        Purely local: parsing, filtering and ranking are all in :mod:`jms_top.advise`,
+        so this works with no API key and no network beyond the poll already running.
+        The model, when configured, only adds a sentence on top.
+        """
+        board = self.query_one("#command", Input)
+        board.display = True
+        board.value = ""
+        board.placeholder = "要跑什么任务？例：8 卡 A100 微调，显存 60G"
+        self._command_mode = "ask"
+        self.set_focus(board)
+
+    def action_negotiate(self) -> None:
+        """Draft the message for the selected host, based on what it is doing."""
+        from .advise import Want, parse_task
+        from .notify import compose, kill_hint
+
+        view = self.selected_view()
+        if view is None:
+            return
+        want = parse_task(self._task_text) if self._task_text else Want()
+        if want.exclusive is None:
+            want.exclusive = True
+        draft = compose(host=view, want=want)
+        self._draft = draft
+        self._detail_mode = True
+        self._draft_text = draft.text() + (f"\n\n{kill_hint(draft)}" if draft.blockers else "")
+        self._paint_now()
+        # Naming the processes needs one extra round trip; the panel repaints when it
+        # lands. A host with nothing running needs no lookup and is painted already.
+        if draft.blockers:
+            self.run_worker(self._load_proc_detail(view.name), exclusive=False, name="procdetail")
+
+    async def _load_proc_detail(self, name: str) -> None:
+        from .advise import Want, parse_task
+        from .notify import compose, kill_hint
+
+        loader = getattr(self.monitor, "proc_detail", None)
+        if loader is None:
+            return
+        await loader([name])
+        view = self.monitor.view.by_name(name)
+        if view is None or self._draft is None or self._draft.host != name:
+            return
+        want = parse_task(self._task_text) if self._task_text else Want()
+        if want.exclusive is None:
+            want.exclusive = True
+        draft = compose(host=view, want=want)
+        self._draft = draft
+        self._draft_text = draft.text() + (f"\n\n{kill_hint(draft)}" if draft.blockers else "")
+        self._paint_now()
+
     def action_close_overlay(self) -> None:
         if self._detail_mode:
             self._detail_mode = False
+            self._draft = None
+            self._draft_text = ""
+            self._advice = None
             self._paint_now()
             return
         if self.query_one("#command", Input).display:

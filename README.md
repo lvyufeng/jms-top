@@ -144,6 +144,8 @@ silently empty screen.
 | `↑` `↓` / `j` `k` | move the selection (the side panel and detail follow immediately) |
 | `f` | cycle the filter: all → free → partial → residual → busy → down/unknown |
 | `/` | search host, tag, group, platform, user, process name — filters as you type, `enter` keeps it, `esc` closes |
+| `a` | describe a task; the side panel ranks the machines that could run it |
+| `n` | draft the Feishu message for the selected host (claim or negotiate) |
 | `enter` | open the selected host's accelerator process list |
 | `esc` | close the process list, or the search box |
 | `r` | run a full round now |
@@ -206,6 +208,93 @@ Useful for trying the keys and for screenshots: it replays
 see is what the real thing does with that data.
 
 ---
+
+## Asking which machine to use
+
+```bash
+jms-top advise "8 卡 A100 微调，显存 60G"
+jms-top advise "4 卡分布式训练" -v      # also list the hosts that lost, and why
+jms-top advise "..." --json             # for a script
+jms-top advise "..." --no-ai            # local ranking only
+```
+
+`advise` reads the description, filters the fleet to machines that can actually hold
+the job, and ranks the rest. In the TUI: `a` opens the same box, `n` drafts the
+message for the selected host.
+
+### Why the model only explains
+
+The ranking is local, deterministic, and works with no API key. The optional model
+never sees the fleet and never counts: a language model reading `FFFFBBBB` gets the
+number of free cards wrong often enough that being wrong means recommending a machine
+with no room. It receives three to five pre-filtered candidates with their facts
+already computed, and returns prose.
+
+Hard constraints — card count, memory floor, model — are rejected locally, so no later
+stage can recommend a machine that cannot run the job.
+
+### Exclusive by default
+
+| mode | for | what wins |
+|---|---|---|
+| **exclusive** | distributed training, multi-card serving | whole-node free, because a neighbour shares the interconnect, not a card slot |
+| **shared** | debugging, one-off scripts | a node somebody is already on, leaving pristine nodes for the jobs that need them whole |
+
+"N 卡" with N ≥ 2, or any of 分布式 / 训练 / vLLM / torchrun, reads as exclusive;
+调试 / 单卡 / 跑个脚本 reads as shared. When it is not stated, exclusive is assumed —
+mistaking a parallel job for a scratch run puts it on a noisy node, while the reverse
+only leaves out candidates. `--shared` overrides.
+
+### Unstated stays unstated
+
+A missing card count is not zero and unreadable memory is not "too small". Both cost
+rank and say so in the reason column, rather than silently narrowing the fleet or
+silently ignoring the requirement.
+
+## Negotiating over Feishu
+
+A free-enough host produces a *claim*; an occupied one produces a *negotiate*, naming
+the processes in the way:
+
+```
+【算力协商】a100-42 需要 8 卡，当前被占用
+需求：a100-42 的 8 张卡，当前只有 0 张空闲
+
+占用情况：
+  · pid 2882417  root  已跑 17:49:12
+     python3 /workspace/sga_framework/.../train.py --tag __UTILS_train_job__
+     占用 8 卡，31.1G/卡
+
+请求：能否释放 8 张？若仍在训练，请回复预计结束时间，我再决定是否另找机器。
+```
+
+The command line, owner and run time come from a `/proc` follow-up fetch — the vendor
+tools report only `python3`, which is anonymous to everyone in the room.
+
+```toml
+[[notify.feishu.groups]]
+name = "A800 集群"
+webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+secret = ""                              # only for signed bots
+```
+
+Groups are chosen at send time. Nothing maps a host to a room automatically: which room
+is affected by a machine is a judgement about people, not something readable off the
+box. The tool composes and sends and **never kills** — it hands over the `kill` command
+for a human to review.
+
+## Optional model
+
+```toml
+[ai]
+base_url = "https://api.deepseek.com/v1"   # any OpenAI-compatible endpoint
+api_key = "sk-..."                          # or JMS_TOP_AI_KEY
+model = "deepseek-chat"
+```
+
+Absent, everything above still works — the advisor is just terser. Every failure
+(timeout, 500, empty reply) degrades to no explanation; the ranking never depends on
+the endpoint being reachable.
 
 ## Reading the verdicts
 
@@ -316,7 +405,7 @@ Two things keep it bounded:
 ## Development
 
 ```bash
-pytest                 # 141 tests, no cluster and no bastion required
+pytest                 # 180 tests, no cluster and no bastion required
 ruff check src tests
 jms-top --demo         # the recorded fleet, in the real UI
 ```
@@ -336,6 +425,9 @@ ssh.py       ControlMaster data plane, one multiplexed session per host
 probe.py     the remote script, per-family guards, sentinel
 families.py  one parser per accelerator vendor
 scan.py      probe reply → HostView; family attribution
+advise.py    task text → constraints → filtered, ranked hosts (pure functions)
+notify.py    draft the Feishu message; send it
+ai.py        optional: explain a ranking, never change one
 monitor.py   poll loop: CPU tick, card tick, batching
 tui.py       Textual app, columns, sorting, keys
 render.py    plain-text table for --once
@@ -352,7 +444,7 @@ If you are an automated agent installing or driving jms-top, this is the short v
 ```bash
 git clone https://github.com/lvyufeng/jms-top && cd jms-top
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q          # expect 141 passed, ~7 s, no network
+.venv/bin/pytest -q          # expect 180 passed, ~8 s, no network
 .venv/bin/jms-top --demo --once | head -5   # the UI renders against a recorded fleet
 ```
 
@@ -369,7 +461,8 @@ JMS_TOP_PASSWORD=… .venv/bin/jms-top login              # or pass --password o
 **Read the fleet** — never parse the table:
 
 ```bash
-jms-top --once --json    # the whole fleet as JSON
+jms-top --once --json              # the whole fleet as JSON
+jms-top advise "4 卡训练" --json    # ranked candidates + rejection reasons
 ```
 
 Top level: `generated_at`, `interval`, `summary`, `hosts[]`.

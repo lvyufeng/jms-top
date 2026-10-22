@@ -164,7 +164,6 @@ _SHARED_HINTS = (
     "调试",
     "试一下",
     "试跑",
-    "跑个",
     "小任务",
     "单卡",
     "单元测试",
@@ -174,6 +173,11 @@ _SHARED_HINTS = (
     "验证一下",
     "hello",
 )
+#: `跑个` is too broad to be a hint on its own — "跑个大任务" says the opposite of a
+#: scratch run. It only counts when what follows is small.
+_SMALL_RUN = re.compile(r"跑个(?:小|简单|测试|脚本|demo|试试)")
+#: Words that mean the opposite: this is a real job, not a poke at something.
+_BIG_HINTS = ("大任务", "长时间", "全量", "全参", "大规模", "生产")
 
 
 def parse_task(text: str) -> Want:
@@ -220,7 +224,9 @@ def parse_task(text: str) -> Want:
         want.exclusive = True
     elif any(h in low for h in _EXCLUSIVE_HINTS):
         want.exclusive = True
-    elif any(h in low for h in _SHARED_HINTS):
+    elif any(h in low for h in _BIG_HINTS):
+        want.exclusive = True
+    elif any(h in low for h in _SHARED_HINTS) or _SMALL_RUN.search(low):
         want.exclusive = False
     else:
         want.exclusive = None  # undecided; the caller asks

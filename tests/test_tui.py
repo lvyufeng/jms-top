@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 from jms_top.demo import demo_monitor
 from jms_top.tui import FILTERS, JmsTopApp, screenshot, verdict_matches
@@ -603,3 +603,75 @@ def test_screenshot_is_coloured_even_when_the_environment_says_otherwise():
     assert colours, "the screenshot has no colour at all"
     # The verdict palette has to survive: free is green, busy red.
     assert "#98e024" in svg, "FREE rows lost their green"
+
+
+def test_asking_for_a_task_ranks_the_fleet_in_the_side_panel():
+    """`a` describes a task; the panel answers with hosts, never with a network call."""
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(170, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            await pilot.press("a")
+            await pilot.pause()
+            input_widget = app.query_one("#command", Input)
+            assert input_widget.display is True
+            assert "任务" in str(input_widget.placeholder)
+            app._task_text = "4 卡分布式训练"
+            app._run_advice(app._task_text)
+            await pilot.pause()
+            return (
+                str(app.query_one("#side-title").content),
+                str(app.query_one("#detail").content),
+                app._advice,
+            )
+
+    title, body, advice = run(go())
+    assert "ADVICE" in title
+    assert "4 卡分布式训练" in body
+    assert advice is not None and advice.candidates
+    # The panel must show why, not just which.
+    assert any("整机空闲" in str(c.reasons) for c in advice.candidates)
+
+
+def test_escaping_the_advice_returns_to_the_cards_panel():
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(170, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            app._run_advice("4 卡分布式训练")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            return (
+                str(app.query_one("#side-title").content),
+                app._advice,
+                app._draft_text,
+            )
+
+    title, advice, draft = run(go())
+    assert "ADVICE" not in title
+    assert advice is None and draft == ""
+
+
+def test_undescribed_mode_defaults_to_exclusive():
+    """Not inferable from the wording, so take the safer reading."""
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False)
+        async with app.run_test(size=(170, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            app._run_advice("跑个大任务")
+            await pilot.pause()
+            return app._advice
+
+    advice = run(go())
+    assert advice is not None
+    assert advice.want.exclusive is True

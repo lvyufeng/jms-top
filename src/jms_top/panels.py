@@ -328,3 +328,49 @@ def _pct_style(p: float | None) -> str:
     if p >= 70:
         return "yellow"
     return ""
+
+
+def advice_view(advice) -> Text:  # noqa: ANN001 - advise.Advice, avoids a cycle
+    """The ranked result, in the side panel.
+
+    Every line says something a person can act on: what was asked for, which hosts
+    fit and why, and — when none do — what is actually missing. "No machines" alone
+    is not an answer.
+    """
+    want = advice.want
+    mode = "独占" if want.exclusive else "共享"
+    need = want.cards or 1
+
+    t = Text()
+    t.append("任务  ", style="bold")
+    t.append(f"{want.note or '（未描述）'}\n")
+    t.append("需求  ", style="bold")
+    t.append(f"{need} 卡 · {mode}")
+    if want.min_mem_gib:
+        t.append(f" · 显存 ≥ {want.min_mem_gib:.0f}G")
+    if want.hours:
+        t.append(f" · {want.hours:g} 小时")
+    t.append("\n\n")
+
+    if not advice.candidates:
+        t.append("没有可用机器\n", style="bold red")
+        t.append(f"{advice.shortfall()}\n", style="dim")
+        return t
+
+    t.append(f"{'HOST':18s} {'CARDS':>6s}  {'SCORE':>5s}\n", style="bold")
+    for c in advice.candidates:
+        t.append(f"{c.name:18s} ", style="")
+        t.append(f"{c.free_cards:>3d}/{c.total_cards:<3d}", style="")
+        t.append(f"  {c.score:5.1f}  ", style="dim")
+        t.append(c.reasons[0] if c.reasons else "", style="")
+        t.append("\n")
+    best = advice.candidates[0]
+    if len(best.reasons) > 1:
+        t.append("\n推荐理由\n", style="bold")
+        for reason in best.reasons[1:]:
+            t.append(f"  · {reason}\n", style="dim")
+    if advice.explanation:
+        t.append("\nAI\n", style="bold")
+        for line in advice.explanation.splitlines():
+            t.append(f"  {line}\n", style="italic")
+    return t
