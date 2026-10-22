@@ -1,7 +1,7 @@
 """The SSH data plane: run one script per host through the JumpServer KoKo gateway.
 
 This is the piece that actually touches machines, and the two things it gets right are
-the two things jms-bridge learned the hard way:
+the two things a KoKo gateway punishes you for getting wrong:
 
 **Control multiplexing.** A KoKo handshake costs seconds, and the deployment this was
 built against has been measured at ~200 s time-to-first-byte for large buffered
@@ -18,7 +18,7 @@ that makes a liveness check trustworthy.
 Scripts are piped to ``bash -s`` over stdin rather than passed as arguments: multi-line
 scripts need no quoting, and nothing from the local shell is ever interpreted.
 
-Unlike jms-bridge's runner this one never sources an ``env_setup`` or ``cd``s into a
+Unlike a general-purpose runner this one never sources an ``env_setup`` or ``cd``s into a
 workdir — a *monitor* must work on a host whose job environment is broken, because
 "the env script fails" is exactly when you want the screen to still say the machine is
 up and idle. That is why :meth:`SSHRunner.exec_on` here has no such parameters.

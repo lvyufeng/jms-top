@@ -1,7 +1,8 @@
 """The remote half: one script that answers "what is free on this host".
 
-Both shapes of answer run through jms-bridge's control-master SSH runner, so the
-bastion costs one handshake per host rather than one per poll:
+Both shapes of answer run through this project's own control-master SSH runner
+(:mod:`jms_top.ssh`), so the bastion costs one handshake per host rather than one
+per poll:
 
 ``cpu``
     The **node** half: load, cores, memory, CPU counters, uptime, logins, top
@@ -29,7 +30,7 @@ Design notes:
   delta between successive polls (see :mod:`jms_top.cpu`); the script only reads
   counters.
 * **The output is bounded.** ``ps | head`` and a per-vendor ``head -N``, because the
-  bastion buffers a reply (jms-bridge measured ~200 s TTFB on large buffered
+  bastion buffers a reply (~200 s TTFB measured on large buffered
   responses) and a 30 000-process node must not push megabytes through it every 3 s.
 * **Every vendor call is time-boxed.** Chip tools buffered through a pipe (all of them
   but the GPU query, which pipes itself) cannot exceed the local script budget anyway;
@@ -332,7 +333,7 @@ def build_script(
 
 #: Printed by ``ping`` and required back in the reply: a KoKo rejection (no permission,
 #: asset offline, bad address) exits **0** with the error on stdout, so the exit status
-#: alone reads as success. Same sentinel pattern as jms-bridge, for the same reason.
+#: alone reads as success. The sentinel is the only proof of a real reply.
 SENTINEL = "jms-top-ok"
 PING_SCRIPT = f"echo {SENTINEL}\n"
 
