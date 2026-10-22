@@ -696,12 +696,15 @@ def test_a_draft_can_be_sent_and_a_failure_keeps_it_on_screen():
             await pilot.pause()
             assert "s 发送" in str(app.query_one("#side-title").content)
             await pilot.press("s")
-            # The send is a worker: let it finish.
-            for _ in range(40):
-                await pilot.pause()
-                await asyncio.sleep(0.05)
-                if app._sidebar_override:
+            # The send runs in a named worker. Wait for that one specifically: the
+            # poll loop is a worker too and never finishes, so `wait_for_complete()`
+            # would wait forever. A named worker beats sleeping a guessed interval.
+            for _ in range(100):
+                if not any(w.name == "send" for w in app.workers):
                     break
+                await pilot.pause()
+                await asyncio.sleep(0.02)
+            await pilot.pause()
             return app._sidebar_override, app._draft_text
 
     shown, draft = run(go())
