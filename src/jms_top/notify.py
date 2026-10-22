@@ -121,6 +121,11 @@ def compose(
         "整机独占" if (want.exclusive and need >= total) else ("独占" if want.exclusive else "共享")
     )
 
+    # `need` defaults to 1 when the task was not described, which would otherwise
+    # produce "需要 1 张卡" for a job nobody has defined yet — a message asking someone
+    # to give up a card on behalf of no stated task.
+    described = bool(want.note.strip()) or want.cards is not None
+
     if len(free_cards) >= need:
         body = "\n".join(
             [
@@ -140,13 +145,22 @@ def compose(
             host=host.name,
         )
 
-    # Not enough free: name whoever is in the way.
+    # Not enough free: name whoever is in the way. `need` defaults to 1 when nothing
+    # was described, which would otherwise ask somebody to free a card on behalf of a
+    # job that does not exist yet — say so instead of pretending.
+    described = bool(want.note.strip()) or want.cards is not None
+    if not described:
+        title = f"【算力协商】{host.name} 资源不足"
+        task_line = "（未描述任务——先用 `a` 说明要跑什么再发）"
+    else:
+        title = f"【算力协商】{host.name} 需要 {need} 卡，当前被占用"
+        task_line = want.note
     holders = _holders(list(accel.cards))
     lines = list(holders.values())
     described = "\n".join(_fmt_proc(p, n) for p, n in lines) if lines else "  （进程列表不可用）"
     body = "\n".join(
         [
-            f"任务：{want.note or '（未填写）'}",
+            f"任务：{task_line}",
             f"需求：{host.name} 的 {need} 张卡，当前只有 {len(free_cards)} 张空闲",
             f"含：{model}{per_card}",
             "",
@@ -161,7 +175,7 @@ def compose(
         ]
     )
     return Draft(
-        title=f"【算力协商】{host.name} 需要 {need} 卡，当前被占用",
+        title=title,
         body=body,
         kind="negotiate",
         host=host.name,

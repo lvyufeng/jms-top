@@ -115,3 +115,11 @@ def test_a_missing_command_line_degrades_instead_of_inventing_one():
     draft = compose(host=_host(free=0, procs=[proc]), want=Want(cards=8))
     assert "1234" in draft.body
     assert "python3" in draft.body
+
+
+def test_an_undescribed_task_does_not_ask_anyone_to_free_a_card():
+    """With no task text the card count defaults to 1, which would produce a request
+    for someone to give up a card on behalf of nothing."""
+    draft = compose(host=_host(free=0), want=Want())
+    assert "未描述任务" in draft.body
+    assert "需要 1 卡" not in draft.title

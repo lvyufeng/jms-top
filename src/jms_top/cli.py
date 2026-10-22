@@ -230,7 +230,18 @@ def main(argv: list[str] | None = None) -> int:
     except MonitorError as exc:
         print(f"jms-top: {exc}", file=sys.stderr)
         return 2
-    JmsTopApp(monitor, watch=_watch_enabled(args)).run()
+    # Groups and the AI endpoint come from the same config the CLI read; passing them
+    # in keeps the TUI free of its own config lookup (and of the cycle that would
+    # create).
+    groups, requester = [], ""
+    try:
+        from .config import load_settings
+
+        settings = load_settings(require_url=False)
+        groups, requester = settings.groups, settings.bastion.login or ""
+    except Exception:  # noqa: BLE001 - a missing config must not stop the UI
+        pass
+    JmsTopApp(monitor, watch=_watch_enabled(args), groups=groups, requester=requester).run()
     return 0
 
 

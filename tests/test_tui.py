@@ -675,3 +675,55 @@ def test_undescribed_mode_defaults_to_exclusive():
     advice = run(go())
     assert advice is not None
     assert advice.want.exclusive is True
+
+
+def test_a_draft_can_be_sent_and_a_failure_keeps_it_on_screen():
+    """A dead webhook must not lose the message the user just composed."""
+
+    class Group:
+        name = "测试群"
+        webhook = "http://127.0.0.1:9/nope"
+        secret = ""
+
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False, groups=[Group()])
+        async with app.run_test(size=(170, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            assert "s 发送" in str(app.query_one("#side-title").content)
+            await pilot.press("s")
+            # The send is a worker: let it finish.
+            for _ in range(40):
+                await pilot.pause()
+                await asyncio.sleep(0.05)
+                if app._sidebar_override:
+                    break
+            return app._sidebar_override, app._draft_text
+
+    shown, draft = run(go())
+    assert "失败" in shown
+    assert "草稿还在" in shown
+    assert draft.strip(), "the draft itself was lost"
+
+
+def test_with_no_groups_configured_sending_explains_how_to_add_one():
+    monitor = demo_monitor(interval=3600, full_interval=7200)
+
+    async def go():
+        app = JmsTopApp(monitor, boot=False, watch=False, groups=[])
+        async with app.run_test(size=(170, 44)) as pilot:
+            await monitor.poll()
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            return app._sidebar_override
+
+    shown = run(go())
+    assert "没有配置飞书群" in shown
+    assert "notify.feishu.groups" in shown

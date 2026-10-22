@@ -269,6 +269,7 @@ class JmsTopApp(App):
         Binding("o", "faster", "interval-"),
         Binding("a", "ask", "ask", show=False),
         Binding("n", "negotiate", "negotiate", show=False),
+        Binding("s", "send", "send", show=False),
         Binding("u", "cycle_sort", "sort", show=False),
         Binding("l", "toggle_log", "log", show=False),
         Binding("ctrl+r", "reload", "reload", show=False),
@@ -283,9 +284,15 @@ class JmsTopApp(App):
         demo: bool = False,
         boot: bool = True,
         watch: bool = False,
+        groups: list | None = None,
+        requester: str = "",
     ):
         super().__init__()
         self.monitor = monitor
+        #: Feishu rooms to offer when sending a draft. Empty is fine — the draft is
+        #: still produced and shown, it just cannot be sent from here.
+        self._groups = groups or []
+        self._requester = requester
         self.demo = demo
         self._boot = boot
         self._watch = watch
@@ -321,6 +328,9 @@ class JmsTopApp(App):
         self._advice = None
         self._draft = None
         self._draft_text = ""
+        #: A message that replaces the draft in the panel (send result, group picker).
+        self._sidebar_override = ""
+        self._choosing_group = False
 
     # --- composition -----------------------------------------------------------
 
@@ -527,8 +537,11 @@ class JmsTopApp(App):
         self.query_one("#cards", Static).update(
             Text("") if self._detail_mode else panels.cards_panel(selected)
         )
-        if self._draft_text:
-            body, title = Text(self._draft_text), "MESSAGE  (n 重生成 · esc)"
+        if self._sidebar_override:
+            body, title = Text(self._sidebar_override), "MESSAGE  (esc)"
+        elif self._draft_text:
+            hint = "n 重生成 · s 发送 · esc" if self._groups else "n 重生成 · esc"
+            body, title = Text(self._draft_text), f"MESSAGE  ({hint})"
         elif self._detail_mode and self._advice is not None:
             body, title = panels.advice_view(self._advice), "ADVICE  (esc)"
         elif self._detail_mode:
@@ -709,6 +722,15 @@ class JmsTopApp(App):
         # compares names instead of using a "we are moving the cursor" flag: cursor
         # moves deliver `RowHighlighted` asynchronously, so a flag set and cleared
         # around `move_cursor()` is already false by the time the event arrives.
+
+    def on_key(self, event) -> None:  # noqa: ANN001 - textual event
+        """Digit keys pick a group while the chooser is up, and do nothing otherwise."""
+        if not self._choosing_group:
+            return
+        key = getattr(event, "key", "")
+        if key.isdigit() and key != "0":
+            event.stop()
+            self.action_select_group(int(key))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.needle = event.value.strip()
@@ -905,12 +927,70 @@ class JmsTopApp(App):
         self._draft_text = draft.text() + (f"\n\n{kill_hint(draft)}" if draft.blockers else "")
         self._paint_now()
 
+    def action_send(self) -> None:
+        """Send the draft to a Feishu room. Picks the room; never picks silently.
+
+        One group configured → send there. Several → switch the side panel to a
+        chooser and let a digit pick one. There is no host-to-room mapping: which room
+        is affected by a machine is a judgement about people.
+        """
+        if self._draft is None or not self._draft_text:
+            return
+        if not self._groups:
+            self._sidebar_override = (
+                "没有配置飞书群。\n\n"
+                "在 ~/.config/jms-top/config.toml 里加：\n\n"
+                "[[notify.feishu.groups]]\n"
+                'name = "A800 集群"\n'
+                'webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."\n'
+            )
+            self._paint_now()
+            return
+        if len(self._groups) == 1:
+            self.run_worker(self._deliver(self._groups[0]), exclusive=False, name="send")
+            return
+        lines = ["发给哪个群？按数字选择\n"]
+        for i, group in enumerate(self._groups, 1):
+            lines.append(f"  {i}. {group.name}")
+        self._sidebar_override = "\n".join(lines)
+        self._choosing_group = True
+        self._paint_now()
+
+    async def _deliver(self, group) -> None:  # noqa: ANN001 - config.FeishuGroup
+        """Send in the background: `post` blocks on a socket, and the UI must keep
+        painting (and keep its SSH channels alive) while an unreachable webhook times
+        out."""
+        import asyncio
+
+        from .notify import post
+
+        webhook = group.webhook
+        secret = getattr(group, "secret", "") or ""
+        text = self._draft_text
+        ok, detail = await asyncio.to_thread(post, webhook, text, secret=secret)
+        name = getattr(group, "name", "群")
+        self.monitor.log(f"sent to {name}" if ok else f"send to {name} failed: {detail}")
+        if ok:
+            head = f"已发送到「{name}」"
+        else:
+            head = f"发送到「{name}」失败：{detail}\n草稿还在，可以复制后手动发。"
+        self._sidebar_override = f"{head}\n\n{self._draft_text}"
+        self._choosing_group = False
+        self._paint_now()
+
+    def action_select_group(self, index: int) -> None:
+        if not self._choosing_group or not (1 <= index <= len(self._groups)):
+            return
+        self.run_worker(self._deliver(self._groups[index - 1]), exclusive=False, name="send")
+
     def action_close_overlay(self) -> None:
         if self._detail_mode:
             self._detail_mode = False
             self._draft = None
             self._draft_text = ""
             self._advice = None
+            self._sidebar_override = ""
+            self._choosing_group = False
             self._paint_now()
             return
         if self.query_one("#command", Input).display:
