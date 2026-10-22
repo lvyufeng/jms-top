@@ -271,17 +271,20 @@ the processes in the way:
 The command line, owner and run time come from a `/proc` follow-up fetch — the vendor
 tools report only `python3`, which is anonymous to everyone in the room.
 
-```toml
-[[notify.feishu.groups]]
-name = "A800 集群"
-webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
-secret = ""                              # only for signed bots
-```
+**Sent as you, not as a bot.** A message from a bot is not a request anyone answers, so
+this uses a Feishu self-built app and a `user_access_token` rather than a group webhook.
+The setup — creating the app, the permissions that must be granted to the *user* rather
+than the app, the redirect URL, then `jms-top feishu login` — is in
+[docs/feishu-setup.md](docs/feishu-setup.md).
 
-Groups are chosen at send time. Nothing maps a host to a room automatically: which room
-is affected by a machine is a judgement about people, not something readable off the
-box. The tool composes and sends and **never kills** — it hands over the `kill` command
-for a human to review.
+> **Status: the sending path has not been exercised against a live tenant.**
+> The endpoints were probed and answer in the expected shapes (`invalid_grant` for a
+> bad code, `99991661` without a token), but no message has been successfully delivered
+> yet — that needs an App ID and Secret from a real enterprise. Treat `s` as untested
+> until this note goes away.
+
+The tool composes and sends and **never kills** — it hands over the `kill` command for a
+human to review.
 
 ## Optional model
 
