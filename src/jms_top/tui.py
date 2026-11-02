@@ -35,7 +35,7 @@ from textual.widgets import DataTable, Input, RichLog, Static
 # Imported as a *module*, not as a list of functions: hot reload replaces the module's
 # globals, and a `from .panels import summary_bar` binding would keep pointing at the
 # function object loaded at startup — the reload would run and change nothing on screen.
-from . import panels
+from . import panels, terminal
 from .model import (
     BUSY,
     DOWN,
@@ -312,6 +312,10 @@ class JmsTopApp(App):
         self._row_rank: dict[str, int] = {}
         self._watcher: SourceWatcher | None = None
         self._restart_pending = False
+        #: Runs while the app does, watching the terminal (see :mod:`jms_top.terminal`).
+        self._supervisor: terminal.Supervisor | None = None
+        #: Whether Textual's input thread took the hardened selector (reported once).
+        self._input_hardened = False
         # True while the widget tree is being rebuilt. The repaint timer keeps firing
         # during that window and would otherwise query widgets that have been removed.
         self._rebuilding = False
@@ -392,6 +396,50 @@ class JmsTopApp(App):
         # An async handler: `run_worker` would create a worker that the app is already
         # tearing down, and a bare call would leave the coroutine un-awaited.
         await self.monitor.close()
+        if self._supervisor is not None:
+            # Disarm: from here on a dead writer is ours, not the terminal's.
+            self._supervisor.stop()
+
+    def run(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003 - Textual's signature
+        """Run the app with its terminal watched and handed back come what may.
+
+        The three things installed before Textual takes the terminal, and why each is
+        not Textual's to do:
+
+        * the **guard** restores the terminal on ``SIGHUP``/``SIGTERM`` and at process
+          exit — the close-the-laptop and kill-the-process paths, where Textual never
+          gets to run its own teardown;
+        * the **supervisor** notices that the terminal has been replaced under us (a
+          tmux server gone, a window reset) by seeing the output pipe die, and ends the
+          process when the app cannot end itself;
+        * the **resilient selector** keeps the input thread from panicking on a pty
+          that no longer has a reader.
+
+        Whatever Textual managed, the restore runs once more on the way out — it is
+        idempotent, and it covers the cases Textual got half-way through — and the
+        process's return code stays the caller's.
+        """
+        terminal.guard_terminal()
+        self._supervisor = terminal.Supervisor(self).start()
+        try:
+            return super().run(*args, **kwargs)
+        finally:
+            # Installed only now: before this point there is no driver, and the
+            # selector is the one its constructor made.
+            self._harden_input()
+            supervisor = self._supervisor
+            if supervisor is not None:
+                supervisor.stop()
+            restored = terminal.restore()
+            # Only when something went wrong: a normal quit must not print anything.
+            if supervisor is not None and supervisor.note:
+                terminal.say(f"jms-top: {supervisor.note}; stopped.")
+            elif not restored:
+                terminal.say("jms-top: the terminal was gone; its settings could not be restored.")
+
+    def _harden_input(self) -> None:
+        """Give Textual's input thread a selector that tolerates a vanished terminal."""
+        self._input_hardened = terminal.harden_input_selector(self)
 
     # --- data → screen ---------------------------------------------------------
 

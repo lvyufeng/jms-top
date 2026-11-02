@@ -172,6 +172,26 @@ busy. The `AGE` column always says how old a card table is.
 Going below `-i 2` buys nothing: the CPU tick alone measured 1.2–3.4 s wall per round,
 so a 1 s interval just queues rounds back to back.
 
+### When the connection or the terminal goes away
+
+Closing the laptop, dropping the network, closing the tab, restarting tmux — none of
+these should cost you a terminal. `jms-top` treats the terminal as something it has to
+give back, whatever happens to it:
+
+| what happened | what `jms-top` does |
+|---|---|
+| closed the laptop / lost the network / `kill jms-top` | puts the cursor, echo and the normal screen back, then dies on the signal as a shell expects (`$? == 129` for SIGHUP) |
+| the tmux session or terminal window went away under it | notices within a second, closes its SSH connections and stops, instead of sitting there holding them with no screen |
+| `Cmd-W`ed the tab it was in | same |
+| Ctrl-Z | hands the terminal back before suspending; `fg` restores it |
+
+A terminal that is *not* given back is the reason a shell ends up "typing into the
+void": no echo, no Ctrl-C, every key showing up as `^[[1;5A`-style debris, and `q`
+doing nothing — the line discipline that turns Ctrl-C into a signal went with the TUI.
+The restore paths are tested in `tests/test_terminal.py` by driving the real app on a
+real pty. On a version without this, a shell recovers with `stty sane` (typed blind: it
+will not echo) followed by Enter.
+
 ### Hot reload
 
 Edit `panels.py`, `render.py`, `tui.py` or `app.tcss` while the app runs and the screen
