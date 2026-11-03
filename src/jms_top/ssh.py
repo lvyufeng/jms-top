@@ -102,6 +102,51 @@ def failure_reason(result: ExecResult) -> str:
     return (result.stderr.strip() or "no reply")[:300]
 
 
+#: What KoKo says when the asset itself is the problem: it does not exist, is not
+#: activated, is offline, or this account may not reach it. These are *decisions*, not
+#: failures — retrying them in three seconds produces the same sentence every time, and
+#: costs a full handshake (with the JumpServer's own auth and audit log) to hear it.
+#:
+#: Deliberately narrow: a login timeout or an unknown error must *not* land here, since
+#: those are the cases where a retry soon afterwards is exactly what is wanted.
+_REFUSAL_MARKERS = (
+    # JumpServer deciding about the asset.
+    "没有资产",
+    "资产未激活",
+    "资产已禁用",
+    "资产不可用",
+    "no asset",
+    "asset not found",
+    "asset is not activated",
+    "asset is offline",
+    "not allowed to access",
+    "禁止访问",
+    "无权限",
+    # KoKo's dialer failing on the asset's address. Measured on the deployment this was
+    # built against: an asset whose recorded address does not resolve answers in well
+    # under a second with exactly this, and will go on answering it until someone fixes
+    # the inventory. There is nothing to retry sooner than that.
+    "no such host",
+    "dial tcp",
+    "connection refused",
+    "i/o timeout",
+)
+
+
+def is_refusal(result: ExecResult) -> bool:
+    """Whether the far side said the asset itself is not reachable, in as many words.
+
+    A refusal is answerable from the reply alone, so it never becomes a retry storm: the
+    monitor backs those hosts off for minutes rather than seconds. Anything else — a
+    timeout, an exception, a dropped connection — is a *transient* failure and stays on
+    the short retry path.
+    """
+    if result.timed_out or result.exit_code != 0:
+        return False
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return any(marker.lower() in text for marker in _REFUSAL_MARKERS)
+
+
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
     """Kill a spawned ``ssh``/``sshpass`` **and** its children, synchronously.
 

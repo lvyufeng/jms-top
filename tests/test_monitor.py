@@ -27,7 +27,7 @@ from jms_top.model import (
     HostView,
     NodeStats,
 )
-from jms_top.monitor import FleetMonitor
+from jms_top.monitor import MAX_BACKOFF, TRANSIENT_BACKOFF, FleetMonitor
 from jms_top.probe import SENTINEL, build_script
 from jms_top.scan import parse_reply, parse_system, reached, split_sections
 from jms_top.ssh import ExecResult
@@ -105,6 +105,8 @@ class FakeRunner:
         value = self.replies[host.name]
         if isinstance(value, Exception):
             raise value
+        if isinstance(value, ExecResult):  # a canned failure, timeouts included
+            return replace(value, host=host.name)
         return ExecResult(host=host.name, exit_code=0, stdout=value, stderr="")
 
     async def close(self) -> None:
@@ -277,6 +279,10 @@ def test_host_failure_is_isolated_and_clears_on_recovery():
         assert mon.view.by_name("b").reachable is False
         assert "bastion said no" in (mon.view.by_name("b").error or "")
         replies["b"] = reply("b")
+        # A failed host waits out its backoff before it is asked again; `force` is the
+        # operator's "ask now" (the `r` key) and is the one path that overrides it.
+        assert mon.due(mon.host_named("b")) is False
+        mon._retry_at["b"] = 0.0  # let the clock pass
         await mon.poll()
         assert mon.view.by_name("b").reachable is True
         assert mon.view.by_name("b").verdict == FREE
@@ -336,10 +342,140 @@ def test_fast_tick_failures_promote_the_host_to_a_full_read():
         mon._last_full["a"] = 1e18  # timer says "not for a very long time"
         mon.runner.replies["a"] = ""
         for _ in range(3):
+            # The host is failing, so it is behind a backoff between attempts; a tick
+            # inside that window would not touch it at all.
+            mon._retry_at.pop("a", None)
             await mon.tick()
+        assert mon._suspect["a"] >= 3
         assert mon.due_full(mon.hosts[0]) is True
 
     asyncio.run(run())
+
+
+# --- retry backoff: an unreachable host is not re-authenticated every tick ---------
+
+
+def _counting_replies(value: str | Exception) -> dict[str, str | Exception]:
+    return {"ok": reply("ok"), "bad": value}
+
+
+def test_a_refused_host_is_not_asked_again_for_minutes():
+    """KoKo saying "no such asset" is a decision; asking every tick is a login storm."""
+    mon = make_monitor(_counting_replies("没有资产或资产未激活\n"))
+
+    async def run():
+        await mon.ping_all()  # the refusal is first heard here
+        calls_after_ping = len(mon.runner.calls)
+        for _ in range(5):  # five ticks in a row
+            await mon.tick()
+            mon._last_full.pop("bad", None)  # force the timer to say "due"
+        # Not one extra ssh to the refused host, no matter how due its timers are.
+        assert len([1 for name, _ in mon.runner.calls if name == "bad"]) == 1
+        assert len(mon.runner.calls) == calls_after_ping + 5 * 0 + 5
+        # ...and the transport was only contacted for the healthy host.
+        assert mon.due(mon.host_named("bad")) is False
+        retry = mon.retry_in(mon.host_named("bad"))
+        assert retry is not None and 250 < retry <= 300
+
+    asyncio.run(run())
+
+
+def test_a_transient_failure_backs_off_and_caps():
+    mon = make_monitor(_counting_replies(RuntimeError("connection reset")))
+
+    async def run():
+        await mon.ping_all()  # one failure: TRANSIENT_BACKOFF
+        delays = []
+        for _ in range(6):
+            mon._retry_at.pop("bad", None)  # pretend the wait is over
+            await mon.tick()
+            now = __import__("time").monotonic()
+            delays.append(mon._retry_at["bad"] - now)
+        # The ping already counted as failure #1, so the first retry waits twice the
+        # base and each one after it doubles, up to the ceiling.
+        assert delays[0] == pytest.approx(TRANSIENT_BACKOFF * 2, abs=0.5)
+        assert delays[1] == pytest.approx(TRANSIENT_BACKOFF * 4, abs=0.5)
+        assert delays[2] == pytest.approx(TRANSIENT_BACKOFF * 8, abs=0.5)
+        assert max(delays) == pytest.approx(MAX_BACKOFF, abs=0.5)
+
+    asyncio.run(run())
+
+
+def test_a_refusal_is_the_long_clock_and_a_timeout_is_the_short_one():
+    """The two failures cost different things, so they get different retry rates."""
+    mon = make_monitor({"refused": "没有资产或资产未激活\n", "timed": "unused"})
+
+    async def run():
+        mon.runner.replies["timed"] = ExecResult("timed", 124, "", "timed out after 20s", True)
+        await mon.poll()
+        refused, timed = mon.host_named("refused"), mon.host_named("timed")
+        assert mon.retry_in(refused) > 200, "a refusal waits minutes"
+        assert mon.retry_in(timed) <= TRANSIENT_BACKOFF + 1, "a timeout is retried soon"
+
+    asyncio.run(run())
+
+
+def test_a_recovered_host_rejoins_as_soon_as_its_clock_runs_out():
+    replies = _counting_replies("没有资产或资产未激活\n")
+    mon = make_monitor(replies)
+
+    async def run():
+        await mon.ping_all()
+        assert mon.view.by_name("bad").reachable is False
+        mon._retry_at["bad"] = 0.0  # the five minutes are up
+        replies["bad"] = reply("bad")
+        await mon.tick()
+        assert mon.view.by_name("bad").reachable is True
+        assert mon.retry_in(mon.host_named("bad")) is None
+        assert mon.view.by_name("bad").error is None
+
+    asyncio.run(run())
+
+
+def test_nothing_is_contacted_inside_a_backoff_even_when_the_timers_say_due():
+    mon = make_monitor(_counting_replies("没有资产或资产未激活\n"))
+
+    async def run():
+        await mon.ping_all()
+        cheap, full = mon.plan()
+        assert "bad" not in [h.name for h in cheap + full]
+        assert "ok" in [h.name for h in cheap + full]
+
+    asyncio.run(run())
+
+
+def test_manual_refresh_still_overrides_the_backoff():
+    """ "`r` means look now": an operator asking on purpose is not a retry storm."""
+    replies = _counting_replies("没有资产或资产未激活\n")
+    mon = make_monitor(replies)
+
+    async def run():
+        await mon.poll()
+        before = len([1 for name, _ in mon.runner.calls if name == "bad"])
+        await mon.poll(force=True)
+        after = len([1 for name, _ in mon.runner.calls if name == "bad"])
+        assert after == before + 1
+
+    asyncio.run(run())
+
+
+def test_koko_dial_failures_count_as_refusals_not_retryable_failures():
+    """The two ways KoKo says "this asset is not reachable", as measured on the fleet.
+
+    Both come back as exit 0 with the explanation on stdout, so they must be classified
+    from the text. Neither improves by asking again in ten seconds.
+    """
+    for text in (
+        "没有资产或资产未激活\n",
+        "dial tcp: lookup 8.130.132.221:229: no such host\n",
+    ):
+        mon = make_monitor({"a": text})
+
+        async def run(m: FleetMonitor = mon) -> None:
+            await m.poll()
+            assert m.retry_in(m.host_named("a")) > 250
+
+        asyncio.run(run())
 
 
 def test_pause_stops_the_loop_and_resume_restarts_it():

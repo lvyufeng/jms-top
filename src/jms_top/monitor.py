@@ -51,7 +51,7 @@ from .inventory import Host, Inventory, InventoryError
 from .model import FREE, FleetView, HostView, NodeStats
 from .probe import PING_SCRIPT, SENTINEL, ProbeLimits, build_script, with_sentinel
 from .scan import parse_reply, reached
-from .ssh import ExecResult, SSHRunner, failure_reason
+from .ssh import ExecResult, SSHRunner, failure_reason, is_refusal
 
 #: How many times slower a full tick runs on a host with nothing free.
 IDLE_FACTOR = 3.0
@@ -60,11 +60,21 @@ IDLE_FACTOR = 3.0
 #: that fills in visibly, not the shortest possible round — and every concurrent command
 #: holds a bastion connection the account has a limit on. Raise it for a large fleet.
 SCAN_BATCH = 4
-#: Consecutive failures after which a host is only polled every Nth round.
-BACKOFF_ROUNDS = 4
 #: Consecutive fast-tick failures that promote a host to a full tick: the cheap probe
 #: cannot tell "unreachable" from "reachable, but /proc is odd".
 SUSPECT_AFTER = 3
+
+#: How long a host that *answered and was refused* waits before it is tried again. KoKo
+#: refusing an asset ("没有资产或资产未激活") is a decision, not an outage: retrying it
+#: every tick buys a full handshake per host per interval to hear the same sentence, and
+#: on an inventory where a third of the assets are stale that is most of the traffic.
+REFUSAL_BACKOFF = 300.0
+#: How long a *transient* failure (timeout, dropped connection, an exception) waits —
+#: shorter, because this is the case where "it came back" is worth noticing quickly.
+#: Doubles per consecutive failure, up to the ceiling below.
+TRANSIENT_BACKOFF = 10.0
+#: Ceiling for the doubling above. A host under it is still retried in the background.
+MAX_BACKOFF = 120.0
 
 
 class MonitorError(RuntimeError):
@@ -128,6 +138,11 @@ class FleetMonitor:
         )
         self._prev_cpu: dict[str, CpuSample] = {}
         self._failures: dict[str, int] = {}
+        #: Per-host retry schedule: consecutive failures, when the next attempt is due
+        #: (monotonic), and whether the last one was a KoKo refusal.
+        self._retry_count: dict[str, int] = {}
+        self._retry_at: dict[str, float] = {}
+        self._refused: set[str] = set()
         #: Consecutive cheap-tick failures per host, which promote it to a full tick.
         self._suspect: dict[str, int] = {}
         #: When each host last got a full tick (monotonic seconds).
@@ -218,17 +233,79 @@ class FleetMonitor:
             assert view is not None
             if isinstance(res, Exception):
                 view.reachable, view.error = False, f"{type(res).__name__}: {res}"[:200]
+                self._schedule_retry(host, refused=False)
             elif reached(res.stdout):
                 view.reachable, view.error = True, None
+                self._clear_retry(host.name)
                 up += 1
             else:
                 view.reachable = False
                 view.error = failure_reason(res)[:200] or "no reply"
+                # The ping is where most refusals are first heard; scheduling here means
+                # the very first tick does not re-ask the hosts that just said no.
+                self._schedule_retry(host, refused=is_refusal(res))
         self._pinged = True
         self._touch()
         down = len(self.hosts) - up
         suffix = f", {down} refused/down" if down else ""
         self.log(f"ping: {up}/{len(self.hosts)} hosts reachable{suffix}")
+
+    # --- retry schedule ---------------------------------------------------------
+
+    def _schedule_retry(self, host: Host, *, refused: bool, now: float | None = None) -> None:
+        """Put ``host`` on the retry schedule after a failure.
+
+        Two clocks, because the two failures cost different things. A refusal means KoKo
+        has already *decided* the asset is unusable; asking again in three seconds only
+        repeats the decision, so it waits :data:`REFUSAL_BACKOFF`. A timeout or a dropped
+        connection is worth looking at again soon, so it doubles from
+        :data:`TRANSIENT_BACKOFF` up to :data:`MAX_BACKOFF`.
+        """
+        now = time.monotonic() if now is None else now
+        name = host.name
+        self._failures[name] = self._failures.get(name, 0) + 1
+        if refused:
+            self._refused.add(name)
+            delay = REFUSAL_BACKOFF
+        else:
+            self._refused.discard(name)
+            count = self._retry_count.get(name, 0) + 1
+            self._retry_count[name] = count
+            delay = min(TRANSIENT_BACKOFF * (2 ** min(count - 1, 10)), MAX_BACKOFF)
+        self._retry_at[name] = now + delay
+
+    def _clear_retry(self, name: str) -> None:
+        self._retry_count.pop(name, None)
+        self._retry_at.pop(name, None)
+        self._refused.discard(name)
+        self._failures.pop(name, None)
+
+    def host_named(self, name: str) -> Host | None:
+        """The inventory entry for ``name`` (the view carries display state, not the Host)."""
+        return next((h for h in self.hosts if h.name == name), None)
+
+    def retry_in(self, host: Host, now: float | None = None) -> float | None:
+        """Seconds until ``host`` may be contacted again, or ``None`` if it may now.
+
+        The number comes off the host's own backoff, so it is the honest answer to "when
+        will that machine be looked at again" — which is what the screen shows for a host
+        that refused, instead of a tick countdown that would imply it is polled with
+        everyone else.
+        """
+        at = self._retry_at.get(host.name)
+        if at is None:
+            return None
+        now = time.monotonic() if now is None else now
+        return max(0.0, at - now)
+
+    def due(self, host: Host, now: float | None = None) -> bool:
+        """Whether ``host`` may be contacted at all right now.
+
+        A host that failed is left alone until its backoff expires — that is the whole
+        point: one unreachable asset must not turn into an ssh handshake every tick.
+        """
+        now = time.monotonic() if now is None else now
+        return self._retry_at.get(host.name, 0.0) <= now
 
     def due_full(self, host: Host, now: float | None = None) -> bool:
         """Whether ``host`` is due a full tick now (cards, processes, disk)."""
@@ -249,16 +326,27 @@ class FleetMonitor:
         started = time.time()
         self.view.round_started = datetime.now(timezone.utc)
         self._round_no += 1
-        round_no = self._round_no
+        now = time.monotonic()
         targets: list[Host] = []
+        waiting: list[Host] = []
         for host in self.hosts:
-            fails = self._failures.get(host.name, 0)
-            if force or fails < 3 or round_no % BACKOFF_ROUNDS == 0:
+            # `force` (the `r` key, `--once`) means "look now" and overrides the retry
+            # schedule — an operator asking on purpose is not a retry storm.
+            if force or self.due(host, now):
                 targets.append(host)
+            else:
+                waiting.append(host)
         for host in self.hosts:
             view = self.view.by_name(host.name)
             if view is not None:
                 view.stale = host not in targets
+        for host in waiting:
+            # A skipped host keeps the reason it is skipped (the host is *known* down,
+            # not stale) and the screen says how long until the next try.
+            view = self.view.by_name(host.name)
+            if view is not None and view.error is None:
+                view.error = "waiting to retry"
+                view.reachable = False
 
         await self._full(targets)
 
@@ -274,11 +362,17 @@ class FleetMonitor:
         )
 
     def plan(self, now: float | None = None) -> tuple[list[Host], list[Host]]:
-        """Split the fleet into ``(cheap targets, full targets)`` for the next tick."""
+        """Split the fleet into ``(cheap targets, full targets)`` for the next tick.
+
+        Hosts still inside their retry backoff appear in neither list: they are not
+        contacted at all until it expires (see :meth:`due`).
+        """
         now = time.monotonic() if now is None else now
         cheap: list[Host] = []
         full: list[Host] = []
         for host in self.hosts:
+            if not self.due(host, now):
+                continue
             (full if self.due_full(host, now) else cheap).append(host)
         return cheap, full
 
@@ -312,6 +406,10 @@ class FleetMonitor:
                 continue
             if isinstance(res, Exception) or not reached(res.stdout):
                 self._suspect[host.name] = self._suspect.get(host.name, 0) + 1
+                # A refusal is usually already known from the full round; record it
+                # here too so a host that starts refusing mid-run slows down at once.
+                if not isinstance(res, Exception):
+                    self._schedule_retry(host, refused=is_refusal(res))
                 continue
             self._suspect.pop(host.name, None)
             node = self._node_from(host, res.stdout, stamp)
@@ -420,9 +518,9 @@ class FleetMonitor:
             self._fail_host(host, view, f"{type(res).__name__}: {res}")
             return
         if not reached(res.stdout):
-            self._fail_host(host, view, failure_reason(res) or "no reply")
+            self._fail_host(host, view, failure_reason(res) or "no reply", res=res)
             return
-        self._failures.pop(host.name, None)
+        self._clear_retry(host.name)
         self._suspect.pop(host.name, None)
         # The sentinel is the first line the far side prints; drop that one line only,
         # so the probe's most valuable content (``##SYS``) becomes the new first line.
@@ -442,8 +540,12 @@ class FleetMonitor:
         view.error = None
         self._last_full[host.name] = time.monotonic()
 
-    def _fail_host(self, host: Host, view: HostView, reason: str) -> None:
-        self._failures[host.name] = self._failures.get(host.name, 0) + 1
+    def _fail_host(
+        self, host: Host, view: HostView, reason: str, *, res: ExecResult | Exception | None = None
+    ) -> None:
+        """Record a failed full read: the screen shows why, the retry schedule when."""
+        refused = isinstance(res, ExecResult) and is_refusal(res)
+        self._schedule_retry(host, refused=refused)
         view.reachable = False
         view.error = reason[:200]
         view.latency_s = None

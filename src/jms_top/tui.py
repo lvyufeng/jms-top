@@ -595,7 +595,11 @@ class JmsTopApp(App):
         elif self._detail_mode:
             body, title = self._process_table(selected), "PROCESSES  (esc)"
         else:
-            body, title = panels.detail_view(selected), "CARDS"
+            # The host may be inside a retry backoff; the panel says when it is next
+            # contacted, so "down" does not read as "abandoned".
+            host = self.monitor.host_named(selected.name) if selected is not None else None
+            retry = self.monitor.retry_in(host) if host is not None else None
+            body, title = panels.detail_view(selected, retry_in=retry), "CARDS"
         self.query_one("#detail", Static).update(body)
         self.query_one("#side-title", Static).update(title)
         self._render_footer(view)

@@ -218,8 +218,18 @@ def _bar(frac: float | None, width: int = 10) -> str:
 # --- detail block -------------------------------------------------------------
 
 
-def detail_view(view: HostView | None, now: datetime | None = None) -> Text:
-    """The selected host's health: node facts, holders, and the top processes."""
+def detail_view(
+    view: HostView | None,
+    now: datetime | None = None,
+    *,
+    retry_in: float | None = None,
+) -> Text:
+    """The selected host's health: node facts, holders, and the top processes.
+
+    ``retry_in`` is the monitor's answer to "when is this host tried again" when it is
+    inside a retry backoff: a host that does not answer is not polled on every tick, and
+    the screen has to say when it will be, or the row looks abandoned.
+    """
     t = Text()
     if view is None:
         return t
@@ -239,6 +249,8 @@ def detail_view(view: HostView | None, now: datetime | None = None) -> Text:
         t.append(reason[:70], style="magenta")
     elif view.verdict == "down":
         t.append((view.error or "unreachable")[:70], style="red")
+    if retry_in is not None and retry_in > 0:
+        t.append(f"   · retry in {_fmt_secs(int(round(retry_in)))}", style="dim")
     t.append("\n")
 
     # The address sits directly under the verdict because it is what you act on: copy
