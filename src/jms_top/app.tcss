@@ -10,15 +10,24 @@
    busy=red, residual=orange, unknown=magenta (never green), down=dim. A row's
    colour is its verdict, so "is anything free" is answerable from arm's length.
 
-   One colour for the whole frame: the bars, the table, the pane it sits in and the
-   side panel are all $table-pad. Nothing shows as a band across the screen except
-   the rows that mean something -- the column header, the cursor row, the zebra
-   striping. $panel (a bluish grey) and $surface (a third grey) are deliberately
-   not used as backgrounds: anywhere one of them met a panel that used the other,
-   the seam read as a grey bar.
+   Two background colours, and every panel uses one of them whole-width, so no
+   seam between two panels can be mistaken for a bar:
+
+     $table-pad   the frame: bars, the command bar, the pane around the table
+     $row-bg      the fleet table and the side panel beside it
+
+   $panel (a bluish grey) and $surface (a third grey) are deliberately not used as
+   backgrounds, and Textual's default zebra striping is switched off -- both were
+   responsible for rows that changed colour part-way across.
 */
 
 $table-pad: #1E1E1E;
+
+/* The fleet table's own background. The table paints its rows across the full width
+   of its widget, so this is the colour every row sits on; the side panel next to it
+   has to use the same one, and the frame around both is $table-pad. Change these two
+   together or the seam between the table and the panel re-appears as a grey band. */
+$row-bg: #272727;
 
 Screen {
     background: $table-pad;
@@ -48,8 +57,28 @@ Screen {
 
 #table {
     height: 1fr;
-    background: $table-pad;
+    background: $row-bg;
     scrollbar-size-vertical: 1;
+}
+
+/* Zebra striping is off in the widget (it was the darker-than-the-panel half of a
+   row being two colours). The two classes stay painted in the table's own colour so
+   a later edit cannot turn the striping back on by accident.
+   No background-tint either: Textual tints a focused DataTable by 5%, which made
+   every row of ours a shade lighter than the panel next to it. */
+#table > .datatable--even-row,
+#table > .datatable--odd-row {
+    background: $row-bg;
+}
+
+#table:focus {
+    background-tint: $row-bg 0%;
+}
+
+#table:focus > .datatable--even-row,
+#table:focus > .datatable--odd-row {
+    background: $row-bg;
+    background-tint: $row-bg 0%;
 }
 
 #table > .datatable--header {
@@ -70,7 +99,7 @@ Screen {
 #side {
     width: 46;
     height: 1fr;
-    background: $table-pad;
+    background: $row-bg;
     padding: 0 1;
 }
 
@@ -82,13 +111,13 @@ Screen {
 
 #cards {
     height: auto;
-    background: $table-pad;
+    background: $row-bg;
 }
 
 #detail {
     height: auto;
     max-height: 14;
-    background: $boost;
+    background: $row-bg;
     padding: 0 1;
 }
 
