@@ -129,6 +129,16 @@ examples:
         "--no-watch", action="store_true", help="disable hot reload even in a dev checkout"
     )
     p.add_argument(
+        "--ssh-backend",
+        choices=("session", "process"),
+        default="session",
+        help=(
+            "how commands reach the fleet: 'session' keeps one logged-in shell per host "
+            "(a poll costs ~0.4s there instead of a fresh login); 'process' runs one "
+            "ssh per command, the previous behaviour"
+        ),
+    )
+    p.add_argument(
         "--screenshot",
         metavar="PATH.svg",
         help="render one TUI frame to an SVG and exit (for docs; needs --demo or a bastion)",
@@ -226,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
             full_interval=args.full_interval,
             timeout=args.timeout,
             nvidia_tile=args.nvidia_tile,
+            backend=args.ssh_backend,
         )
     except MonitorError as exc:
         print(f"jms-top: {exc}", file=sys.stderr)
@@ -332,6 +343,7 @@ async def _cmd_advise(args, settings) -> int:  # noqa: ANN001
             interval=args.interval,
             full_interval=args.full_interval,
             timeout=args.timeout,
+            backend=args.ssh_backend,
         )
     except MonitorError as exc:
         print(f"jms-top: {exc}", file=sys.stderr)
@@ -598,6 +610,7 @@ async def _one_shot(args, targets: list[str]) -> int:
             full_interval=args.full_interval,
             timeout=args.timeout,
             nvidia_tile=args.nvidia_tile,
+            backend=args.ssh_backend,
         )
     except MonitorError as exc:
         print(f"jms-top: {exc}", file=sys.stderr)

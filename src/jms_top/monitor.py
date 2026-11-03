@@ -81,6 +81,28 @@ class MonitorError(RuntimeError):
     """Configuration or inventory problem — the message is meant for the user."""
 
 
+def make_runner(bastion: Bastion, *, backend: str = "session") -> SSHRunner:
+    """The transport for this run: persistent shells, or one ``ssh`` per script.
+
+    ``session`` is the default because it is an order of magnitude cheaper per poll on
+    the bastion this was built for (a probe is 0.4 s on a live shell against 2-30 s
+    cold). ``process`` is the previous behaviour, kept as the way back if a gateway
+    dislikes long-lived shells: ``jms-top --ssh-backend process``.
+    """
+    from .session import SessionRunner
+
+    if backend == "process":
+        return SSHRunner(bastion, max_parallel=bastion.max_parallel)
+    if backend not in {"session", "auto"}:
+        raise MonitorError(f"unknown ssh backend {backend!r} (use 'session' or 'process')")
+    try:
+        return SessionRunner(bastion, max_parallel=bastion.max_parallel)
+    except Exception as exc:  # noqa: BLE001 - never refuse to start over a preference
+        if backend == "session":
+            raise MonitorError(f"could not start the session backend: {exc}") from exc
+        return SSHRunner(bastion, max_parallel=bastion.max_parallel)
+
+
 class FleetMonitor:
     """Builds the host list from the inventory and polls it."""
 
@@ -97,6 +119,7 @@ class FleetMonitor:
         nvidia_tile: bool = False,
         timeout: float = 45.0,
         log: Callable[[str], None] | None = None,
+        backend: str = "session",
     ):
         try:
             if bastion is None:
@@ -108,7 +131,7 @@ class FleetMonitor:
             # (no config, no inventory), which every user hits exactly once.
             raise MonitorError(str(exc)) from exc
         self._owns_runner = runner is None
-        self.runner = runner or SSHRunner(bastion, max_parallel=bastion.max_parallel)
+        self.runner = runner or make_runner(bastion, backend=backend)
         self.limits = limits or ProbeLimits()
         self.nvidia_tile = nvidia_tile
         self.timeout = timeout
