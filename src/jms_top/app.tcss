@@ -9,6 +9,12 @@
    Colours are used for one job only: state. free=green, partial=yellow,
    busy=red, residual=orange, unknown=magenta (never green), down=dim. A row's
    colour is its verdict, so "is anything free" is answerable from arm's length.
+
+   Backgrounds are $surface everywhere a line of table shows through — the title
+   bar, the footer, the command bar, the side panel — so the fleet reads as one
+   screen and the only bands that stand out are the ones that mean something (the
+   column header, the cursor row). $panel is a different, bluish grey; on the
+   title bar and footer it shows up as two grey bars framing the table.
 */
 
 Screen {
@@ -17,7 +23,7 @@ Screen {
 
 #titlebar {
     height: 1;
-    background: $panel;
+    background: $surface;
     color: $text;
     padding: 0 1;
 }
@@ -60,7 +66,7 @@ Screen {
 #side {
     width: 46;
     height: 1fr;
-    background: $panel;
+    background: $surface;
     padding: 0 1;
 }
 
@@ -72,7 +78,7 @@ Screen {
 
 #cards {
     height: auto;
-    background: $panel;
+    background: $surface;
 }
 
 #detail {
@@ -84,7 +90,7 @@ Screen {
 
 #footer-bar {
     height: 1;
-    background: $panel;
+    background: $surface;
     color: $text-muted;
     padding: 0 1;
 }
@@ -96,7 +102,7 @@ Screen {
 /* The command bar replaces the footer while typing a filter. */
 #command {
     height: 3;
-    background: $panel;
+    background: $surface;
     padding: 0 1;
 }
 
