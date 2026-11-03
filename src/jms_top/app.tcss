@@ -10,20 +10,23 @@
    busy=red, residual=orange, unknown=magenta (never green), down=dim. A row's
    colour is its verdict, so "is anything free" is answerable from arm's length.
 
-   Backgrounds are $surface everywhere a line of table shows through — the title
-   bar, the footer, the command bar, the side panel — so the fleet reads as one
-   screen and the only bands that stand out are the ones that mean something (the
-   column header, the cursor row). $panel is a different, bluish grey; on the
-   title bar and footer it shows up as two grey bars framing the table.
+   One colour for the whole frame: the bars, the table, the pane it sits in and the
+   side panel are all $table-pad. Nothing shows as a band across the screen except
+   the rows that mean something -- the column header, the cursor row, the zebra
+   striping. $panel (a bluish grey) and $surface (a third grey) are deliberately
+   not used as backgrounds: anywhere one of them met a panel that used the other,
+   the seam read as a grey bar.
 */
 
+$table-pad: #1E1E1E;
+
 Screen {
-    background: $surface;
+    background: $table-pad;
 }
 
 #titlebar {
     height: 1;
-    background: $surface;
+    background: $table-pad;
     color: $text;
     padding: 0 1;
 }
@@ -40,11 +43,12 @@ Screen {
 #fleet-pane {
     width: 1fr;
     height: 1fr;
+    background: $table-pad;
 }
 
 #table {
     height: 1fr;
-    background: $surface;
+    background: $table-pad;
     scrollbar-size-vertical: 1;
 }
 
@@ -66,7 +70,7 @@ Screen {
 #side {
     width: 46;
     height: 1fr;
-    background: $surface;
+    background: $table-pad;
     padding: 0 1;
 }
 
@@ -78,7 +82,7 @@ Screen {
 
 #cards {
     height: auto;
-    background: $surface;
+    background: $table-pad;
 }
 
 #detail {
@@ -90,7 +94,7 @@ Screen {
 
 #footer-bar {
     height: 1;
-    background: $surface;
+    background: $table-pad;
     color: $text-muted;
     padding: 0 1;
 }
@@ -102,7 +106,7 @@ Screen {
 /* The command bar replaces the footer while typing a filter. */
 #command {
     height: 3;
-    background: $surface;
+    background: $table-pad;
     padding: 0 1;
 }
 
